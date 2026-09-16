@@ -28,6 +28,7 @@ import gzip
 import importlib.util
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -801,37 +802,73 @@ server = launch_server(CFG)
 # ---------------- 5. tunnel (in parallel with the server start) ----------------
 banner(5, "Public URL")
 url = None
-tunnel = None
+TUN = [None]
+
+
+def start_tunnel(attempts=3, wait_s=90):
+    """A cloudflared quick tunnel -> its public URL, or None. Registration sometimes fails or hangs (seen in our runs):
+    an attempt that prints no URL within `wait_s` is killed and retried. No forced --protocol: cloudflared falls back
+    from quic to http2 on its own where UDP is dropped."""
+    pat = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+    for i in range(attempts):
+        tun = subprocess.Popen([str(CLOUDFLARED), "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        q = queue.Queue()
+        threading.Thread(target=lambda: [q.put(l) for l in iter(tun.stdout.readline, "")], daemon=True).start()
+        t0 = time.time()
+        while time.time() - t0 < wait_s:
+            try:
+                line = q.get(timeout=5)
+            except queue.Empty:
+                if tun.poll() is not None:
+                    break
+                continue
+            m = pat.search(line)
+            if m:
+                TUN[0] = tun
+                return m.group(0)
+        tun.kill()
+        log(f"   tunnel attempt {i + 1}/{attempts}: no URL within {wait_s} s (cloudflared rc {tun.poll()}); retrying")
+    return None
+
+
+def tunnel_probe(u, wait_s=180):
+    """Background: confirm the public URL answers (a fresh hostname can take a minute to resolve); if it never does,
+    open a new tunnel once and announce the new URL."""
+    global url
+    t0 = time.time()
+    while time.time() - t0 < wait_s:
+        try:
+            urllib.request.urlopen(f"{u}/health", timeout=10).read()
+            log(f"   tunnel reachable from outside: {u} ({time.time() - t0:.0f} s after it opened)")
+            return
+        except Exception:  # noqa: BLE001
+            time.sleep(10)
+    log(f"   tunnel URL {u} did not answer in {wait_s} s: opening a new one")
+    if TUN[0] is not None:
+        TUN[0].kill()
+    new = start_tunnel()
+    if new:
+        url = new
+        publish("tunnel-url", endpoint=f"{new}/v1")
+        log(f"#  NEW ENDPOINT: {new}/v1   (the earlier URL never resolved; the API key is unchanged)")
+    else:
+        publish("tunnel-failed", note="server still reachable inside the kernel on :8000")
+
+
 for _ in range(60):  # cloudflared download runs in the background from step 1
     if CLOUDFLARED.exists():
         break
     time.sleep(2)
 if CLOUDFLARED.exists():
-    tunnel = subprocess.Popen([str(CLOUDFLARED), "tunnel", "--url", f"http://127.0.0.1:{PORT}",
-                               "--no-autoupdate", "--protocol", "quic"],
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    pat = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
-    lines = []
-
-    def pump_cf():
-        for line in tunnel.stdout:
-            lines.append(line.rstrip())
-            _raw.write(f"[cloudflared] {line}")
-    threading.Thread(target=pump_cf, daemon=True).start()
-    deadline = time.time() + 180
-    while time.time() < deadline and url is None:
-        for ln in lines:
-            m = pat.search(ln)
-            if m:
-                url = m.group(0).rstrip("/")
-                break
-        time.sleep(1)
-if url:
-    log(f"   your endpoint will be  {url}/v1")
-    log("   (not live yet — it answers 502 until the READY banner below)")
-    publish("tunnel-url", endpoint=f"{url}/v1")
-else:
-    publish("tunnel-failed", note="server still reachable inside the kernel on :8000")
+    url = start_tunnel()
+    if url:
+        log(f"   your endpoint will be  {url}/v1")
+        log("   (not live yet — it answers 502 until the READY banner below)")
+        publish("tunnel-url", endpoint=f"{url}/v1")
+        threading.Thread(target=tunnel_probe, args=(url,), daemon=True).start()
+    else:
+        publish("tunnel-failed", note="server still reachable inside the kernel on :8000")
 
 # ---------------- 6. wait, announce, self-test, keep alive ----------------
 startup = wait_healthy(server, CFG, expect_min)
