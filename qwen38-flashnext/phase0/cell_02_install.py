@@ -1,11 +1,14 @@
 # Phase 0 / cell 2 — install the stack (CPU session, ~10–20 min first run)
 # 1. tpu-inference at the commit the fork was written against (c824927)
 # 2. the fork's qwen4_exp JAX model copied on top + its registration patch
-# 3. fork + test deps
-# Everything lands in /kaggle/working (20 GB limit; the checkout is ~1 GB).
+# 3. import check against the OVERLAYED tree (never a fork editable install —
+#    the fork's pyproject maps `tpu_inference` onto its partial tree and
+#    shadows the real checkout, seen live).
+# Every step is idempotent: safe to re-run this cell any number of times.
 
 import os
 import subprocess
+import sys
 
 W = "/kaggle/working"
 TPU_INF = f"{W}/tpu-inference"
@@ -20,7 +23,7 @@ def sh(cmd):
     for line in tail[-8:]:
         print("   ", line)
     if r.returncode != 0:
-        print(f"!! FAILED (rc={r.returncode}) — full output kept in the cell log")
+        print(f"!! FAILED (rc={r.returncode})")
         raise SystemExit(1)
     return r
 
@@ -28,12 +31,10 @@ def sh(cmd):
 # 1. jax CPU first (the version the fork targets; libtpu is NOT wanted here)
 sh("pip install -q 'jax[cpu]==0.11.0' flax pytest safetensors numpy")
 
-# 2. tpu-inference at the pinned commit
+# 2. tpu-inference at the pinned commit (full clone contains every ancestor,
+#    so a plain detach checkout works; fetch-by-sha is what GitHub rejects)
 if not os.path.isdir(TPU_INF):
     sh(f"git clone --quiet https://github.com/vllm-project/tpu-inference {TPU_INF}")
-# A full clone already contains every ancestor commit, so try the plain
-# checkout FIRST; only fall back to explicit sha fetches if it is somehow
-# not in history. (fetch-by-sha is what GitHub rejects; seen live.)
 r = subprocess.run(f"git -C {TPU_INF} checkout --quiet --detach {PIN}", shell=True, capture_output=True)
 if r.returncode != 0:
     print(f"direct checkout of {PIN} failed — trying an explicit fetch")
@@ -49,22 +50,35 @@ head = subprocess.run(f"git -C {TPU_INF} rev-parse --short HEAD",
 print("tpu-inference checked out at:", head, "(pin:", PIN + ")")
 sh(f"pip install -q -e {TPU_INF}")
 
-# 3. fork overlay: copy the model in, apply the registration patch (loudly)
+# 3. fork overlay: refresh the copy (rm first — a plain re-cp would nest), then
+#    apply the registration patch, tolerating an already-patched tree
 if not os.path.isdir(FORK):
     sh(f"git clone --quiet --depth 1 https://github.com/DQN-Labs/nexus-tpu-fork {FORK}")
+sh(f"rm -rf {TPU_INF}/tpu_inference/models/jax/qwen4_exp")
 sh(f"cp -r {FORK}/tpu_inference/models/jax/qwen4_exp {TPU_INF}/tpu_inference/models/jax/")
+patch_target = f"{TPU_INF}/tpu_inference/models/common/model_loader.py"
 r = subprocess.run(f"patch -p1 --dry-run -d {TPU_INF} < {FORK}/patches/model_loader.patch",
                    shell=True, capture_output=True)
-if r.returncode != 0:
+if r.returncode == 0:
+    sh(f"patch -p1 -d {TPU_INF} < {FORK}/patches/model_loader.patch")
+elif os.system(f"grep -q qwen4_exp {patch_target}") == 0:
+    print("patch already applied — ok")
+else:
     print("!! the fork's patch does not apply to this tpu-inference checkout:")
-    print(r.stdout.decode()[-500:], r.stderr.decode()[-500:])
+    print(r.stdout.decode()[-400:], r.stderr.decode()[-400:])
     raise SystemExit(1)
-sh(f"patch -p1 -d {TPU_INF} < {FORK}/patches/model_loader.patch")
-sh(f"pip install -q -e '{FORK}[test]'")
 
-# 4. import check (the overlay registers into tpu-inference's registry)
+# 3b. repair: an earlier `pip install -e fork` (if run) shadows tpu_inference
+sh("pip uninstall -q -y tpu-inference-qwen4exp || true")
+
+# 4. import check — resolve explicitly to the overlayed checkout so the
+#    running interpreter does not depend on pip's freshly-written .pth files
+import importlib
+sys.path.insert(0, TPU_INF)
+importlib.invalidate_caches()
 import tpu_inference  # noqa: E402
 from tpu_inference.models.jax.qwen4_exp import weight_loader as WL  # noqa: E402
+assert WL.__file__ and TPU_INF in WL.__file__, f"wrong tree: {WL.__file__}"
 print("tpu-inference:", tpu_inference.__file__)
 print("qwen4_exp weight_loader:", WL.__file__)
 

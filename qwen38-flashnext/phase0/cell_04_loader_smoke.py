@@ -6,7 +6,13 @@
 
 import json
 import re
+import sys
 import urllib.request
+import importlib
+
+# resolve tpu_inference to the OVERLAYED checkout, not whatever pip cached
+sys.path.insert(0, "/kaggle/working/tpu-inference")
+importlib.invalidate_caches()
 
 REPO = "VnimanieAI/Qwen3.8-Flash-Next-W4A16"
 PACKED_SUFFIXES = (

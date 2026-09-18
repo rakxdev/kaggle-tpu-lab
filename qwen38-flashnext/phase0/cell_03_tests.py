@@ -6,8 +6,12 @@
 
 import subprocess
 
+# tests must import the OVERLAYED checkout (with qwen4_exp + patch), so pin it
+# on PYTHONPATH regardless of what pip's editable state says
 r = subprocess.run(
-    "cd /kaggle/working/nexus-tpu-fork && python -m pytest tests/models/jax/test_qwen4_exp.py -q",
+    "cd /kaggle/working/nexus-tpu-fork && "
+    "PYTHONPATH=/kaggle/working/tpu-inference "
+    "python -m pytest tests/models/jax/test_qwen4_exp.py -q",
     shell=True, text=True, capture_output=True, timeout=3600,
 )
 out = (r.stdout + r.stderr).strip().splitlines()
