@@ -69,15 +69,18 @@ def download(name, dest):
 def create_dataset(folder, ds_id):
     meta = {"id": ds_id, "title": ds_id.split("/")[1], "licenses": LICENSES}
     json.dump(meta, open(os.path.join(folder, "dataset-metadata.json"), "w"))
-    r = sh(f"kaggle datasets create -p {folder}", check=False)
-    out = (r.stdout + r.stderr)
-    if r.returncode == 0 and ("successfully created" in out or "successfully" in out):
-        return "created"
-    if "already exist" in out:
-        v = sh(f"kaggle datasets version -p {folder} -m 'pack' --dir-mode skip",
-               check=False)
-        return "versioned" if v.returncode == 0 else f"version-failed: {v.stderr[-200:]}"
-    return f"create-failed: {out[-300:]}"
+    # drop any leftover from an earlier attempt (private or partial) — a
+    # dataset version would keep its old visibility
+    sh(f"kaggle datasets delete -y {ds_id}", check=False)
+    out = ""
+    for attempt in (1, 2):
+        r = sh(f"kaggle datasets create -p {folder} -u", check=False)  # -u = public
+        out = r.stdout + r.stderr
+        if "being created" in out or "successfully" in out:
+            return "created-public"
+        log(f"  create attempt {attempt} failed: {out[-220:]!r}")
+        time.sleep(30)
+    return f"create-failed: {out[-220:]}"
 
 
 def main():
