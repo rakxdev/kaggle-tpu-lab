@@ -20,8 +20,11 @@ import urllib.request
 REPO = "VnimanieAI/Qwen3.8-Flash-Next-W4A16"
 OWNER = "rakeshbehera42"
 PREFIX = "qwen38-flashnext-w4a16"
-WORK = "/kaggle/working/pack"
-BIN_LIMIT = 18.0e9  # per-dataset byte budget (pair the 30 shards -> ~15 datasets)
+# Stage OUTSIDE /kaggle/working: that path is a 20 GB loop device and filled
+# up (OSError 28) with 12-18 GB chunks — the root cause of every failed
+# create. /kaggle/tmp sits on the root overlay with ~1 TB free.
+WORK = "/kaggle/tmp/pack"
+BIN_LIMIT = 18.0e9  # per-dataset byte budget (pair the 30 shards -> ~13 datasets)
 LICENSES = [{"name": "other"}]
 
 
