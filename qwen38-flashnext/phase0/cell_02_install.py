@@ -50,6 +50,14 @@ head = subprocess.run(f"git -C {TPU_INF} rev-parse --short HEAD",
 print("tpu-inference checked out at:", head, "(pin:", PIN + ")")
 sh(f"pip install -q -e {TPU_INF}")
 
+# 2b. vllm is a PEER dependency, not in tpu-inference's requirements.txt —
+# without it the package __init__ dies at `from vllm.logger import ...`
+# (seen live). Install it separately: co-resolving both in one pip call is
+# impossible at this pin (tpu-inference pins numba==0.62.1, vllm 0.28.0 wants
+# 0.65.0); installed sequentially, pip upgrades numba and only warns about
+# tpu-inference's stale pin — expected and harmless for these CPU tests.
+sh("pip install -q 'vllm==0.28.0'")
+
 # 3. fork overlay: refresh the copy (rm first — a plain re-cp would nest), then
 #    apply the registration patch, tolerating an already-patched tree
 if not os.path.isdir(FORK):
@@ -72,13 +80,18 @@ else:
 sh("pip uninstall -q -y tpu-inference-qwen4exp || true")
 
 # 4. import check — resolve explicitly to the overlayed checkout so the
-#    running interpreter does not depend on pip's freshly-written .pth files
+#    running interpreter does not depend on pip's freshly-written .pth files;
+#    JAX_PLATFORMS=cpu keeps libtpu (installed by tpu-inference's requirements)
+#    from hijacking jax on a machine with no TPU
 import importlib
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 sys.path.insert(0, TPU_INF)
 importlib.invalidate_caches()
+import vllm  # noqa: E402,F401
 import tpu_inference  # noqa: E402
 from tpu_inference.models.jax.qwen4_exp import weight_loader as WL  # noqa: E402
 assert WL.__file__ and TPU_INF in WL.__file__, f"wrong tree: {WL.__file__}"
+print("vllm:", vllm.__version__)
 print("tpu-inference:", tpu_inference.__file__)
 print("qwen4_exp weight_loader:", WL.__file__)
 

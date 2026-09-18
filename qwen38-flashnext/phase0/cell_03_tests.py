@@ -7,10 +7,10 @@
 import subprocess
 
 # tests must import the OVERLAYED checkout (with qwen4_exp + patch), so pin it
-# on PYTHONPATH regardless of what pip's editable state says
+# on PYTHONPATH; JAX_PLATFORMS=cpu keeps libtpu from hijacking jax on CPU
 r = subprocess.run(
     "cd /kaggle/working/nexus-tpu-fork && "
-    "PYTHONPATH=/kaggle/working/tpu-inference "
+    "JAX_PLATFORMS=cpu PYTHONPATH=/kaggle/working/tpu-inference "
     "python -m pytest tests/models/jax/test_qwen4_exp.py -q",
     shell=True, text=True, capture_output=True, timeout=3600,
 )

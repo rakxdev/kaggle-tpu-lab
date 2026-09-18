@@ -5,12 +5,15 @@
 # Downloads only config.json + the safetensors index (KBs).
 
 import json
+import os
 import re
 import sys
 import urllib.request
 import importlib
 
-# resolve tpu_inference to the OVERLAYED checkout, not whatever pip cached
+# resolve tpu_inference to the OVERLAYED checkout, not whatever pip cached;
+# JAX_PLATFORMS=cpu keeps libtpu from hijacking jax on a CPU session
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 sys.path.insert(0, "/kaggle/working/tpu-inference")
 importlib.invalidate_caches()
 
