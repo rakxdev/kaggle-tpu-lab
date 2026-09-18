@@ -49,11 +49,24 @@ def collect_mounted():
     return got
 
 
+def hf_headers():
+    """Authenticated downloads: HF throttles anonymous IPs hard after ~a
+    hundred GB in a day (seen live — streams degraded to a crawl). A free
+    read token lifts the ceiling. Token from env or the hub cache file."""
+    tok = os.environ.get("HF_TOKEN")
+    if not tok:
+        p = os.path.expanduser("~/.cache/huggingface/token")
+        if os.path.exists(p):
+            tok = open(p).read().strip()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
 def hf_download(name, dest, expected):
     tmp = dest + ".part"
     url = f"https://huggingface.co/{REPO}/resolve/main/{name}"
     t0 = time.time()
-    with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=hf_headers()),
+                                timeout=120) as r, open(tmp, "wb") as f:
         done = 0
         while True:
             b = r.read(1 << 22)
@@ -115,7 +128,7 @@ def main():
 
     if todo:
         t0 = time.time()
-        with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        with cf.ThreadPoolExecutor(max_workers=12) as ex:
             for _ in ex.map(lambda t: hf_download(*t), todo):
                 pass
         log(f"downloads done in {(time.time()-t0)/60:.1f} min "
