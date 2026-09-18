@@ -110,11 +110,17 @@ def main():
             f"({sum(s for _, s in files)/1e9:.1f} GB) ===")
         os.makedirs(folder, exist_ok=True)
         try:
+            from concurrent.futures import ThreadPoolExecutor
+            targets = []
             for name, _ in files:
                 dest = os.path.join(folder, os.path.basename(name))
                 if not (os.path.exists(dest) and abs(os.path.getsize(dest) - dict(shards)[name]) < 1e6):
-                    log(f"  downloading {name}")
-                    download(name, dest)
+                    targets.append((name, dest))
+            if targets:
+                log(f"  downloading {len(targets)} shards in parallel")
+                with ThreadPoolExecutor(max_workers=min(3, len(targets))) as ex:
+                    for r in ex.map(lambda t: download(*t), targets):
+                        pass
             res = create_dataset(folder, ds_id)
         except Exception as e:
             res = f"error: {e!r}"[:300]
