@@ -10,7 +10,7 @@ import subprocess
 # on PYTHONPATH; JAX_PLATFORMS=cpu keeps libtpu from hijacking jax on CPU
 r = subprocess.run(
     "cd /kaggle/working/nexus-tpu-fork && "
-    "JAX_PLATFORMS=cpu PYTHONPATH=/kaggle/working/tpu-inference "
+    "JAX_PLATFORMS=cpu VLLM_TARGET_DEVICE=cpu PYTHONPATH=/kaggle/working/tpu-inference "
     "python -m pytest tests/models/jax/test_qwen4_exp.py -q",
     shell=True, text=True, capture_output=True, timeout=3600,
 )

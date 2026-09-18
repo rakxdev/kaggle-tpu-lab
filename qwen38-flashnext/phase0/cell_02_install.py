@@ -80,18 +80,28 @@ else:
 sh("pip uninstall -q -y tpu-inference-qwen4exp || true")
 
 # 4. import check — resolve explicitly to the overlayed checkout so the
-#    running interpreter does not depend on pip's freshly-written .pth files;
-#    JAX_PLATFORMS=cpu keeps libtpu (installed by tpu-inference's requirements)
-#    from hijacking jax on a machine with no TPU
+#    running interpreter does not depend on pip's freshly-written .pth files.
+#    VLLM_TARGET_DEVICE=cpu is authoritative in vllm's platform resolver: it
+#    skips plugin probing entirely — otherwise tpu-inference's TPU platform
+#    plugin activates on detection paths that cannot work on a CPU box and
+#    the lazy `current_platform` resolution dies inside __getattr__ (seen
+#    live as "cannot import name 'current_platform'").
 import importlib
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
+import traceback
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ["VLLM_TARGET_DEVICE"] = "cpu"
 sys.path.insert(0, TPU_INF)
 importlib.invalidate_caches()
-import vllm  # noqa: E402,F401
-import tpu_inference  # noqa: E402
-from tpu_inference.models.jax.qwen4_exp import weight_loader as WL  # noqa: E402
+try:
+    import vllm  # noqa: E402,F401
+    import tpu_inference  # noqa: E402
+    from tpu_inference.models.jax.qwen4_exp import weight_loader as WL  # noqa: E402
+except Exception:
+    print("!! import failed — full underlying chain below (send it back):")
+    traceback.print_exc()
+    raise SystemExit(1)
 assert WL.__file__ and TPU_INF in WL.__file__, f"wrong tree: {WL.__file__}"
-print("vllm:", vllm.__version__)
+print("vllm:", vllm.__version__, "| platform:", os.environ["VLLM_TARGET_DEVICE"])
 print("tpu-inference:", tpu_inference.__file__)
 print("qwen4_exp weight_loader:", WL.__file__)
 

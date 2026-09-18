@@ -13,7 +13,8 @@ import importlib
 
 # resolve tpu_inference to the OVERLAYED checkout, not whatever pip cached;
 # JAX_PLATFORMS=cpu keeps libtpu from hijacking jax on a CPU session
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ["VLLM_TARGET_DEVICE"] = "cpu"
 sys.path.insert(0, "/kaggle/working/tpu-inference")
 importlib.invalidate_caches()
 
