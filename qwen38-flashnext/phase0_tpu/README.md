@@ -1,7 +1,10 @@
 # Phase 0b — the TPU run (first-ever v5e-8 tok/s for Qwen3.8-Flash-Next)
 
-Prerequisite: the notebook has **all 13 `qwen38-flashnext-w4a16-*` datasets
-attached** (do it while the session is still queued) and Internet ON.
+Prerequisite: Internet ON. **Dataset attachment is optional** — the resolver
+uses the `qwen38-flashnext-w4a16-*` datasets when they are mounted and
+downloads any missing shards from HuggingFace in parallel otherwise
+(~12–15 min for the full 180 GB at 250–300 MB/s; byte-exact completeness is
+asserted either way before the loader runs).
 
 ## In the TPU session, paste TWO cells
 
