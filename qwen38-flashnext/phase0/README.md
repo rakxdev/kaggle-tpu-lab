@@ -10,9 +10,10 @@ New Kaggle notebook → Session options: **Accelerator = None (CPU)**, **Interne
 → paste this single cell and run it (20–30 min first run):
 
 ```python
-!git clone -q https://github.com/rakxdev/kaggle-tpu-lab /kaggle/working/kaggle-tpu-lab && \
-python /kaggle/working/kaggle-tpu-lab/qwen38-flashnext/phase0/run_all.py
+!cd /kaggle/working && if [ -d kaggle-tpu-lab/.git ]; then git -C kaggle-tpu-lab fetch -q origin && git -C kaggle-tpu-lab reset -q --hard origin/main && git -C kaggle-tpu-lab clean -qfd; else git clone -q https://github.com/rakxdev/kaggle-tpu-lab; fi && python kaggle-tpu-lab/qwen38-flashnext/phase0/run_all.py
 ```
+
+(The cell is re-run safe: an existing clone is reset to the latest main instead of re-cloned, so every push I make is picked up by simply re-running it.)
 
 Everything runs in order and is teed to `/kaggle/working/phase0_results.txt`:
 
