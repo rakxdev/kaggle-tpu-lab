@@ -86,7 +86,11 @@ def create_dataset(folder, ds_id):
 def dataset_complete(ds_id, files):
     """True if every expected shard basename already exists in the dataset."""
     r = sh(f"kaggle datasets files {ds_id}", check=False)
-    listed = {line.split()[-1] for line in r.stdout.splitlines() if line.strip()}
+    listed = set()
+    for line in r.stdout.splitlines():
+        s = line.strip()
+        if s and not set(s) <= set("- ") and not s.lower().startswith(("name", "ref", "size")):
+            listed.add(s.split()[0])  # first column is the file name
     return all(os.path.basename(n) in listed for n, _ in files)
 
 
