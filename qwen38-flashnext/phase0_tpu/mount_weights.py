@@ -128,7 +128,7 @@ def main():
 
     if todo:
         t0 = time.time()
-        with cf.ThreadPoolExecutor(max_workers=12) as ex:
+        with cf.ThreadPoolExecutor(max_workers=16) as ex:
             for _ in ex.map(lambda t: hf_download(*t), todo):
                 pass
         log(f"downloads done in {(time.time()-t0)/60:.1f} min "
