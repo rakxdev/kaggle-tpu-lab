@@ -9,6 +9,7 @@ TPU-specific vs the CPU smoke test:
 """
 
 import os.path
+import re
 import subprocess
 import sys
 
@@ -29,6 +30,22 @@ def sh(cmd):
     return r
 
 
+def pip_have(mod, min_version=None):
+    """True if the module imports (optionally at >= min_version) — a fast gate
+    so re-runs don't pay pip's full resolution for already-installed stack."""
+    try:
+        m = __import__(mod)
+        if min_version:
+            from importlib.metadata import version
+            v = version(mod)
+            def vn(s):
+                return [int(x) for x in re.findall(r"\d+", s)[:3]]
+            return vn(v) >= vn(min_version)
+        return True
+    except Exception:
+        return False
+
+
 # 1. the torch base — but skip the heavy reinstall when a healthy 2.13.0 is
 #    already in place (re-run friendliness; the TPU VM's preinstalled 2.8.0
 #    gets force-replaced on the first run)
@@ -41,7 +58,10 @@ if _ok:
     print("torch 2.13.0 already healthy — skipping force-reinstall")
 else:
     sh('pip install -q --force-reinstall "torch==2.13.0" "torchvision==0.28.0"')
-sh('pip install -q "vllm==0.28.0"')
+if not pip_have("vllm", "0.28.0"):
+    sh('pip install -q "vllm==0.28.0"')
+else:
+    print("vllm 0.28.0 present — skipping")
 
 if not os.path.isdir(TPU_INF):
     sh(f"git clone --quiet https://github.com/vllm-project/tpu-inference {TPU_INF}")
@@ -67,8 +87,11 @@ else:
     raise SystemExit(1)
 
 # the TPU jax stack: jax[tpu] brings libtpu; flax/tpu-info for the init chain
-sh('pip install -q "jax[tpu]==0.11.0" "flax==0.12.8" "tpu-info==0.7.1" '
-   "jaxtyping pytest pytest-mock absl-py safetensors numpy")
+if pip_have("jax", "0.11.0") and pip_have("flax", "0.12.8"):
+    print("jax/flax already healthy — skipping")
+else:
+    sh('pip install -q "jax[tpu]==0.11.0" "flax==0.12.8" "tpu-info==0.7.1" '
+       "jaxtyping pytest pytest-mock absl-py safetensors numpy")
 
 # torchax must match OUR torch (2.13.0): the VM's preinstalled copy targets the
 # old image torch (2.8) and dies at `torch.ops.aten.prod.dim_Dimname` on
