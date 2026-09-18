@@ -25,8 +25,10 @@ PACKED_SUFFIXES = (
 )
 
 def hf_raw(path):
-    url = f"https://huggingface.co/{REPO}/raw/main/{path}"
-    with urllib.request.urlopen(url, timeout=30) as r:
+    # /resolve/ follows Git LFS — the 22 MB index.json is an LFS object, and
+    # /raw/ returns its pointer text, which is what broke the first run
+    url = f"https://huggingface.co/{REPO}/resolve/main/{path}"
+    with urllib.request.urlopen(url, timeout=180) as r:
         return r.read()
 
 idx = json.loads(hf_raw("model.safetensors.index.json"))
