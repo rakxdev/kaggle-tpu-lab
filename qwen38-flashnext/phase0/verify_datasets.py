@@ -16,7 +16,8 @@ def hf_sizes():
         f"https://huggingface.co/api/models/{P.REPO}?blobs=true")
     with urllib.request.urlopen(req, timeout=60) as r:
         api = json.load(r)
-    return {s["rfilename"]: (s.get("size") or 0) for s in api["siblings"]}
+    return {s["rfilename"]: (s.get("size") or 0) for s in api["siblings"]
+            if s["rfilename"].endswith(".safetensors")}  # same filter as the packer
 
 
 def kaggle_files(ds_id):
@@ -27,14 +28,18 @@ def kaggle_files(ds_id):
         if not s or set(s) <= set("- ") or s.lower().startswith(("name", "ref", "size")):
             continue
         parts = s.split()
-        name = parts[0]
-        size_gb = 0.0
+        name, size_gb = parts[0], 0.0
         for tok in parts[1:]:
             m = re.match(r"^([0-9.]+)(GB|MB|KB|B)$", tok, re.I)
             if m:
                 mult = {"GB": 1e9, "MB": 1e6, "KB": 1e3, "B": 1}[m.group(2).upper()]
                 size_gb = float(m.group(1)) * mult / 1e9
                 break
+            try:
+                size_gb = int(tok) / 1e9  # raw bytes, e.g. 6400032032
+                break
+            except ValueError:
+                continue
         out[name] = size_gb
     return out
 
