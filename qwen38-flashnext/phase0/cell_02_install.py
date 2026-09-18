@@ -31,16 +31,22 @@ sh("pip install -q 'jax[cpu]==0.11.0' flax pytest safetensors numpy")
 # 2. tpu-inference at the pinned commit
 if not os.path.isdir(TPU_INF):
     sh(f"git clone --quiet https://github.com/vllm-project/tpu-inference {TPU_INF}")
-# shallow clone cannot always check out a raw SHA: try cheap fetch, fall back to full history
-r = subprocess.run(f"git -C {TPU_INF} fetch --depth 1 origin {PIN}", shell=True, capture_output=True)
-if r.returncode == 0:
-    sh(f"git -C {TPU_INF} checkout --quiet --detach {PIN}")
-else:
-    print("shallow fetch of the pin failed — unshallowing (one-time, slower)")
-    sh(f"git -C {TPU_INF} fetch --quiet --unshallow")
-    sh(f"git -C {TPU_INF} checkout --quiet --detach {PIN}")
-print("tpu-inference at:", subprocess.run(f"git -C {TPU_INF} rev-parse --short HEAD",
-                                          shell=True, capture_output=True, text=True).stdout.strip())
+# A full clone already contains every ancestor commit, so try the plain
+# checkout FIRST; only fall back to explicit sha fetches if it is somehow
+# not in history. (fetch-by-sha is what GitHub rejects; seen live.)
+r = subprocess.run(f"git -C {TPU_INF} checkout --quiet --detach {PIN}", shell=True, capture_output=True)
+if r.returncode != 0:
+    print(f"direct checkout of {PIN} failed — trying an explicit fetch")
+    r2 = subprocess.run(f"git -C {TPU_INF} fetch --quiet origin {PIN}", shell=True, capture_output=True)
+    if r2.returncode != 0:
+        print("!! could not check out the pin; continuing on HEAD — the patch "
+              "dry-run below is the real compatibility gate")
+        print(r2.stderr.decode()[-300:])
+    else:
+        sh(f"git -C {TPU_INF} checkout --quiet --detach {PIN}")
+head = subprocess.run(f"git -C {TPU_INF} rev-parse --short HEAD",
+                      shell=True, capture_output=True, text=True).stdout.strip()
+print("tpu-inference checked out at:", head, "(pin:", PIN + ")")
 sh(f"pip install -q -e {TPU_INF}")
 
 # 3. fork overlay: copy the model in, apply the registration patch (loudly)
