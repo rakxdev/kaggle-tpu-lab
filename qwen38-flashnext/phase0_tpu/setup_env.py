@@ -29,7 +29,18 @@ def sh(cmd):
     return r
 
 
-sh('pip install -q --force-reinstall "torch==2.13.0" "torchvision==0.28.0"')
+# 1. the torch base — but skip the heavy reinstall when a healthy 2.13.0 is
+#    already in place (re-run friendliness; the TPU VM's preinstalled 2.8.0
+#    gets force-replaced on the first run)
+try:
+    import torch as _torch
+    _ok = _torch.__version__.startswith("2.13.0")
+except Exception:
+    _ok = False
+if _ok:
+    print("torch 2.13.0 already healthy — skipping force-reinstall")
+else:
+    sh('pip install -q --force-reinstall "torch==2.13.0" "torchvision==0.28.0"')
 sh('pip install -q "vllm==0.28.0"')
 
 if not os.path.isdir(TPU_INF):
@@ -58,6 +69,12 @@ else:
 # the TPU jax stack: jax[tpu] brings libtpu; flax/tpu-info for the init chain
 sh('pip install -q "jax[tpu]==0.11.0" "flax==0.12.8" "tpu-info==0.7.1" '
    "jaxtyping pytest pytest-mock absl-py safetensors numpy")
+
+# torchax must match OUR torch (2.13.0): the VM's preinstalled copy targets the
+# old image torch (2.8) and dies at `torch.ops.aten.prod.dim_Dimname` on
+# import (seen live). The Sept-18 dev wheel is built against torch 2.13;
+# --no-deps keeps it from touching torch/jax.
+sh('pip install -q --no-deps --upgrade "torchax==0.0.14.dev20260918"')
 
 sh("pip uninstall -q -y tpu-inference-qwen4exp || true")
 
