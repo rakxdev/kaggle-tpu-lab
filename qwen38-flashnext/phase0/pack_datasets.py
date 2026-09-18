@@ -83,6 +83,13 @@ def create_dataset(folder, ds_id):
     return f"create-failed: {out[-220:]}"
 
 
+def dataset_complete(ds_id, files):
+    """True if every expected shard basename already exists in the dataset."""
+    r = sh(f"kaggle datasets files {ds_id}", check=False)
+    listed = {line.split()[-1] for line in r.stdout.splitlines() if line.strip()}
+    return all(os.path.basename(n) in listed for n, _ in files)
+
+
 def main():
     os.makedirs(WORK, exist_ok=True)
     shards = shard_sizes()
@@ -105,6 +112,10 @@ def main():
     for n, files in enumerate(bins, 1):
         ds_id = f"{OWNER}/{PREFIX}-{n:02d}"
         folder = os.path.join(WORK, f"chunk{n:02d}")
+        if dataset_complete(ds_id, files):
+            log(f"=== dataset {n}/{len(bins)}: {ds_id} already complete — skipped ===")
+            results.append((ds_id, "skipped-complete"))
+            continue
         t0 = time.time()
         log(f"=== dataset {n}/{len(bins)}: {ds_id} "
             f"({sum(s for _, s in files)/1e9:.1f} GB) ===")
