@@ -19,7 +19,13 @@ The last printed lines are the endpoint, the API key and the model name. This
 cell *is* the server — it stays running until the keepalive expires.
 
 Tunables (env vars): `QWEN_GPU_CTX` (32768), `QWEN_GPU_KEEPALIVE_MIN` (480),
-`QWEN_GPU_TOOL_PARSER` (hermes).
+`QWEN_GPU_TOOL_PARSER` (hermes), `QWEN_GPU_NTFY_TOPIC` + `QWEN_GPU_NTFY_TOKEN`.
+
+If `QWEN_GPU_NTFY_TOPIC` is set, the script publishes its progress to that topic
+(ready, endpoint URL, API key, tunnel replacements, vLLM death with the log
+tail, heartbeats) — so the URL reaches a driver without reading cell output.
+The token is the same ntfy account token the relay cell uses; anonymous
+publishing from a Kaggle VM's shared IP gets 429s.
 
 ## What the run does
 

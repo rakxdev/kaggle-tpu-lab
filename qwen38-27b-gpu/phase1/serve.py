@@ -45,6 +45,10 @@ MODEL_NAME = "qwen38-27b-int4"
 CTX = int(os.environ.get("QWEN_GPU_CTX", "32768"))
 KEEPALIVE_MIN = int(os.environ.get("QWEN_GPU_KEEPALIVE_MIN", "480"))
 TOOL_PARSER = os.environ.get("QWEN_GPU_TOOL_PARSER", "hermes")
+# If set, READY/endpoint/death events are published to this ntfy topic so the
+# URL and API key reach you (or the driver) without copying cell output.
+NTFY_TOPIC = os.environ.get("QWEN_GPU_NTFY_TOPIC", "")
+NTFY_TOKEN = os.environ.get("QWEN_GPU_NTFY_TOKEN", "")
 
 T0 = time.time()
 API_KEY = "qwen-" + secrets.token_hex(12)
@@ -56,6 +60,25 @@ def log(*parts):
 
 def elapsed():
     return f"{int(time.time() - T0) // 60} min {int(time.time() - T0) % 60} s"
+
+
+def publish(phase, **extra):
+    """Log always; also push to ntfy if a topic is configured. Anonymous ntfy
+    publishing from a Kaggle VM's shared IP gets 429s, so a token is used when
+    provided (the same one the relay cell uses)."""
+    log(f"PHASE {phase}" + (f" {json.dumps(extra)}" if extra else ""))
+    if not NTFY_TOPIC:
+        return
+    try:
+        body = json.dumps({"phase": phase, **extra}).encode()
+        hdr = {"Content-Type": "application/json"}
+        if NTFY_TOKEN:
+            hdr["Authorization"] = f"Bearer {NTFY_TOKEN}"
+        # publish without a title so the whole JSON lands in the message body
+        req = urllib.request.Request(f"https://ntfy.sh/{NTFY_TOPIC}", data=body, headers=hdr)
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception as e:  # noqa: BLE001
+        log(f"   (ntfy publish failed: {e})")
 
 
 def banner(step, title, note=""):
@@ -181,8 +204,10 @@ def tunnel_probe(url, tun_holder, wait_s=180):
     new, tun = start_tunnel()
     if new:
         tun_holder[0] = tun
+        publish("tunnel-url", endpoint=new, note="replaced-unreachable")
         log(f"#  NEW ENDPOINT: {new}   (the API key is unchanged)")
         return new
+    publish("tunnel-failed", note=f"server still live inside the kernel on :{PORT}")
     log("#  tunnel gave no reachable URL; the server is still live inside the kernel on :8000")
     return None
 
@@ -215,6 +240,7 @@ def main():
         proc = launch(with_tools)
         up = wait_for_server(proc)
     if not up:
+        publish("failed", step="vllm-start")
         raise SystemExit(1)
     log(f"   structured tool calls: {'ON (' + TOOL_PARSER + ')' if with_tools else 'OFF (text only)'}")
 
@@ -227,10 +253,11 @@ def main():
     banner(4, "Tunnel", "public cloudflared URL")
     url, tun = start_tunnel()
     tun_holder = [tun]
-    new = None
     if url:
+        publish("tunnel-url", endpoint=url)
         threading.Thread(target=tunnel_probe, args=(url, tun_holder), daemon=True).start()
     else:
+        publish("tunnel-failed", note=f"server reachable inside the kernel on :{PORT}")
         log("   no tunnel; the server is reachable inside the kernel on :8000")
     endpoint = url or f"http://127.0.0.1:{PORT}"
 
@@ -254,27 +281,37 @@ def main():
     log(f"#  Serving for up to {KEEPALIVE_MIN} min, then this cell exits on its own.")
     log(f"#  Kaggle ends GPU sessions after 12 h. Each run gets a new tunnel URL.")
     log("#" * 70)
+    publish("ready", endpoint=endpoint, api_key=API_KEY, model=MODEL_NAME,
+            max_model_len=CTX, keepalive_min=KEEPALIVE_MIN,
+            tools="on" if with_tools else "text-only",
+            startup_secs=int(time.time() - T0))
 
     t_serve = time.time()
     while time.time() - t_serve < KEEPALIVE_MIN * 60:
         time.sleep(120)
         if proc.poll() is not None:
             log(f"!! vLLM died (rc={proc.returncode}); last lines of {VLLM_LOG}:")
+            tail = ""
             try:
-                log("   " + "\n   ".join(VLLM_LOG.read_text(errors="replace").splitlines()[-25:]))
+                tail = "\n".join(VLLM_LOG.read_text(errors="replace").splitlines()[-25:])
+                log("   " + tail.replace("\n", "\n   "))
             except Exception:  # noqa: BLE001
                 pass
+            publish("vllm-died", rc=proc.returncode, tail=tail[-800:])
             raise SystemExit(1)
         if tun_holder[0] is not None and tun_holder[0].poll() is not None:
             log("   tunnel process exited; opening a new one")
             new, tun = start_tunnel()
             if new:
                 tun_holder[0] = tun
+                publish("tunnel-url", endpoint=new, note="replaced")
                 log(f"#  NEW ENDPOINT: {new}   (API key unchanged)")
         up_min = int((time.time() - t_serve) / 60)
         if up_min % 10 < 2:
             log(f"   heartbeat: up {up_min} min, endpoint {endpoint}")
+            publish("heartbeat", up_min=up_min, endpoint=endpoint)
     log(f"   keepalive of {KEEPALIVE_MIN} min reached — shutting down")
+    publish("auto-shutdown", served_min=KEEPALIVE_MIN)
     proc.terminate()
 
 
