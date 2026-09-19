@@ -8,6 +8,21 @@ Measured quality of the checkpoint (RedHatAI, served via vLLM, 3 seeds):
 IFEval 99.67% recovery, MMLU-Pro 98.81%, GSM8K 101.07%, MATH-500 99.52%,
 GPQA-D 98.49%, AIME 98.69% — vs the BF16 model.
 
+## Measured on Kaggle 2x T4 (first cold run)
+
+| Step | Result |
+|---|---|
+| Environment + 19.5 GB checkpoint | 3.3 min |
+| Load + compile | 13.1 min (compile cache is written to disk; a warm restart skips it) |
+| Generation proof | "The capital of Germany is" -> "Berlin." — correct |
+| Decode, single stream | **42.0 tok/s** (MTP speculative decoding active) |
+| Prefill | ~9,012 tokens in 35.1 s = 257 tok/s (first run; includes JIT warmup) |
+
+Per-GPU memory at 0.92 utilization: 10.2 GiB weights, ~1.5 GiB KV cache
+(14.4 GiB usable). The KV budget is the constraint for serving — the GDN
+layers carry a recurrent state rather than a KV cache, so context length is
+not the binding limit, but concurrent streams are.
+
 ## Cells (run in order, one at a time)
 
 **CELL 1 — machine + GPU report** (nvidia-smi's CUDA line decides the torch
