@@ -71,6 +71,34 @@ if r.returncode != 0:
     sh(f"git -C {TPU_INF} checkout --quiet --detach {PIN}")
 sh(f"pip install -q -e {TPU_INF} --no-deps")
 
+# tpu-inference went in --no-deps to protect the pinned torch (the fork's
+# canonical `pip install -e` would swap it — that cost us the nccl symbol
+# failure once). Complete the gap from its OWN requirements.txt, constrained
+# so pip cannot touch the pinned stack. Seen live: without this, the load
+# dies at `from tokamax... import gmm_v2` deep in the fork's MoE path.
+_req = f"{TPU_INF}/requirements.txt"
+_want = [ln.strip() for ln in open(_req)
+         if ln.strip() and not ln.strip().startswith(("#", "--"))]
+_have = set()
+from importlib.metadata import distributions  # noqa: E402
+for _d in distributions():
+    try:
+        _have.add(_re.sub(r"[-_.]+", "-", _d.metadata["Name"]).lower())
+    except Exception:  # noqa: BLE001
+        pass
+_miss = [r for r in _want
+         if _re.match(r"^([A-Za-z0-9_.-]+)", r)
+         and _re.sub(r"[-_.]+", "-", _re.match(r"^([A-Za-z0-9_.-]+)", r).group(1)).lower() not in _have]
+if _miss:
+    _pins = f"{W}/pins.txt"
+    with open(_pins, "w") as f:
+        f.write("jax==0.11.0\ntorch==2.13.0\nvllm==0.28.0\nflax==0.12.8\n"
+                "torchax==0.0.14.dev20260918\n")
+    sh(f'pip install -q -c "{_pins}" ' + " ".join(f'"{m}"' for m in _miss))
+    print(f"installed {len(_miss)} missing tpu-inference requirements")
+else:
+    print("tpu-inference requirements complete — skipping")
+
 if not os.path.isdir(FORK):
     sh(f"git clone --quiet --depth 1 https://github.com/DQN-Labs/nexus-tpu-fork {FORK}")
 sh(f"rm -rf {TPU_INF}/tpu_inference/models/jax/qwen4_exp")
