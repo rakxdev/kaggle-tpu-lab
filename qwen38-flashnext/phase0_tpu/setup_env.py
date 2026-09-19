@@ -86,6 +86,18 @@ else:
     print("!! patch does not apply")
     raise SystemExit(1)
 
+# The checkpoint's model_type (qwen4_exp) is not in stock transformers, and
+# vLLM's engine workers are separate processes with per-process registries.
+# The fork's designed answer (its startup.py docstring): drop a .pth into
+# site-packages so EVERY new interpreter installs the HF config mapping and
+# the JAX model registration. Without it, LLM() dies in pydantic config
+# validation ("Transformers does not recognize this architecture").
+import sysconfig  # noqa: E402
+_pth = os.path.join(sysconfig.get_paths()["purelib"], "qwen4exp_tpu_startup.pth")
+with open(_pth, "w") as f:
+    f.write("import tpu_inference.models.jax.qwen4_exp.startup\n")
+print(f"qwen4_exp startup hook -> {_pth}")
+
 # the TPU jax stack: jax[tpu] brings libtpu; flax/tpu-info for the init chain
 if pip_have("jax", "0.11.0") and pip_have("flax", "0.12.8"):
     print("jax/flax already healthy — skipping")
@@ -111,6 +123,8 @@ try:
     import jax  # noqa: E402,F401
     import tpu_inference  # noqa: E402
     from tpu_inference.models.jax.qwen4_exp import weight_loader as WL  # noqa: E402,F401
+    from tpu_inference.models.jax.qwen4_exp.hf_config import install_hf_config  # noqa: E402
+    install_hf_config()  # must succeed: LLM() cannot parse the checkpoint without it
 except Exception:
     print("!! import failed — full chain below:")
     traceback.print_exc()

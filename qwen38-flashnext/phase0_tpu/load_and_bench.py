@@ -18,6 +18,13 @@ import jax  # noqa: E402
 print("devices:", jax.devices(), flush=True)
 assert len(jax.devices()) == 8
 
+# The checkpoint's model_type (qwen4_exp) is not in stock transformers; this
+# fork call registers the HF config mapping and the JAX model impl for THIS
+# process (setup_env.py also drops a .pth so spawned engine workers get it).
+from tpu_inference.models.jax.qwen4_exp.startup import install  # noqa: E402
+_info = install()
+print("qwen4_exp install:", _info or "ok", flush=True)
+
 from vllm import LLM, SamplingParams  # noqa: E402
 
 t0 = time.time()
