@@ -38,6 +38,9 @@ def main():
         max_model_len=CTX,
         max_num_seqs=4,
         gpu_memory_utilization=0.92,
+        # vLLM 0.28 defaults this model's KV cache to fp8, which needs SM89+.
+        # The T4 is SM75: native fp8e4nv is unavailable, so pin float16.
+        kv_cache_dtype="float16",
         speculative_config={"method": "mtp", "num_speculative_tokens": 3},
     )
     print(f"\nLOAD+COMPILE: {(time.time() - t0) / 60:.1f} min", flush=True)

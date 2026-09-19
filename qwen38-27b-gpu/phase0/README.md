@@ -50,6 +50,13 @@ print("preinstalled torch:", torch.__version__, "| cuda avail:", torch.cuda.is_a
 
 ## Known risks
 
+- **`FP8 KV cache is not supported ... on Tesla T4 (compute capability 7.5)`.
+  vLLM 0.28 defaults this architecture's KV cache to fp8 (the checkpoint does
+  not ask for it — this is vLLM's own default), and native fp8e4nv needs SM89+.
+  The load pins `kv_cache_dtype="float16"`.
+- **vLLM's engine core is spawned, not forked.** Every entrypoint must build the
+  engine under `if __name__ == "__main__"`; module-level `LLM(...)` is re-executed
+  in the spawned child and trips multiprocessing's bootstrapping check.
 - vLLM's GDN/FLA Triton kernels on SM75 are the one untested piece — if the
   load fails on them, the fallback is the llama.cpp route (prebuilt SM75
   binary + unsloth GGUF), which has no such dependency.
