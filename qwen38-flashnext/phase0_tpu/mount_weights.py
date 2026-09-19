@@ -35,17 +35,24 @@ def hf_manifest():
 
 
 def collect_mounted():
-    """Shards available from attached datasets -> {name: source path}."""
+    """Shards available from attached datasets -> {name: source path}.
+
+    Kaggle mounts attached datasets in TWO layouts depending on account/session
+    type: the flat /kaggle/input/<slug> and the nested
+    /kaggle/input/datasets/<owner>/<slug> (seen live on the 2026-09-20 TPU
+    session: all 13 datasets nested, a flat scan saw zero). Scan both.
+    """
+    import glob
     got = {}
-    base = "/kaggle/input"
-    if not os.path.isdir(base):
-        return got
-    for d in sorted(os.listdir(base)):
-        if not d.startswith("qwen38-flashnext-w4a16"):
+    dirs = sorted(set(
+        glob.glob("/kaggle/input/qwen38-flashnext-w4a16*")
+        + glob.glob("/kaggle/input/datasets/*/qwen38-flashnext-w4a16*")))
+    for d in dirs:
+        if not os.path.isdir(d):
             continue
-        for f in sorted(os.listdir(f"{base}/{d}")):
+        for f in sorted(os.listdir(d)):
             if f.endswith(".safetensors"):
-                got[f] = f"{base}/{d}/{f}"
+                got[f] = f"{d}/{f}"
     return got
 
 

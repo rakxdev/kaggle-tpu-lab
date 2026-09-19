@@ -46,7 +46,8 @@ for name, title in STEPS:
     print("\n" + "#" * 70)
     if title is None:  # machine report
         subprocess.run("nproc; free -g | head -2; df -h /kaggle/working /kaggle/tmp / 2>/dev/null | head -6", shell=True)
-        subprocess.run("ls /kaggle/input | grep qwen38-flashnext | head -20", shell=True)
+        # datasets mount flat OR nested (/kaggle/input/datasets/<owner>/<slug>)
+        subprocess.run("ls -d /kaggle/input/qwen38-flashnext* /kaggle/input/datasets/*/qwen38-flashnext* 2>/dev/null | head -20", shell=True)
         continue
     print(f"### {title}")
     print("#" * 70)
