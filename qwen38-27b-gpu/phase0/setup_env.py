@@ -18,6 +18,13 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cu_env  # noqa: E402
+
+# Kaggle's T4 image is a CUDA-12.8 host; vllm 0.28.0 is a cu130 build whose
+# runtime the loader cannot see. Re-exec fixes the path before `import vllm`.
+cu_env.reexec()
+
 VLLM_PIN = "0.28.0"
 TORCH_PIN = "2.13.0"
 INT4_REPO = "RedHatAI/Qwen3.8-27B-INT4"

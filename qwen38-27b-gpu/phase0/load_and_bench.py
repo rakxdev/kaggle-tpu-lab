@@ -8,12 +8,18 @@ First load compiles; keep context at 32k to bound that cost.
 """
 
 import os
+import sys
 import time
 
 CKPT = "/kaggle/tmp/ckpt"
 CTX = 32768
 
 os.environ.setdefault("VLLM_LOGGING_LEVEL", "INFO")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cu_env  # noqa: E402
+
+cu_env.reexec()  # vllm's cu130 runtime is off the loader path on this image
 
 from vllm import LLM, SamplingParams  # noqa: E402
 

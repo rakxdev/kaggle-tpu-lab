@@ -55,3 +55,18 @@ print("preinstalled torch:", torch.__version__, "| cuda avail:", torch.cuda.is_a
   binary + unsloth GGUF), which has no such dependency.
 - MTP acceptance collapses at batch ≥ 4 (vLLM issue #55533) — max_num_seqs is
   capped at 4 and single-stream benchmarks are unaffected.
+
+## Gotchas already paid for
+
+- **`libcudart.so.13: cannot open shared object file`.** Kaggle's T4 image is a
+  CUDA 12.8 host (`/usr/local/cuda-12.8`, `LD_LIBRARY_PATH` → its libs), but
+  PyPI vllm 0.28.0 is a cu130 build and its `_C` extension has no rpath. Torch
+  2.13's cu130 wheels install the CUDA-13 runtime into
+  `site-packages/nvidia/cu13/lib/`, which the loader never searches — so
+  `import vllm` dies. `cu_env.py` finds that directory and re-execs the process
+  with it on `LD_LIBRARY_PATH` (the value is only read at exec time, so an
+  in-process `os.environ` change is not enough). It is imported first by every
+  entrypoint and is a no-op on a normal CUDA-13 host.
+- **`/kaggle/tmp` does not exist on GPU sessions** (TPU images have it). It is a
+  plain directory on the ~1 TB root overlay, so the resolver creates it; the
+  19.5 GB checkpoint cannot live on the 20 GB `/kaggle/working` loop device.

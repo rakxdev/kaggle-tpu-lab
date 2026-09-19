@@ -11,6 +11,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 LOG = Path("/kaggle/working/phase0gpu_results.txt")
 
+# The driver's children inherit this env, and the fix has to be in place
+# before setup_env.py imports vllm.
+sys.path.insert(0, str(HERE))
+import cu_env  # noqa: E402
+
+cu_env.reexec()
+
 
 class Tee:
     def __init__(self, path):

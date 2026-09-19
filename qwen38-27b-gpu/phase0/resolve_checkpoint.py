@@ -58,6 +58,9 @@ def fetch(name, dest, expected):
 
 
 def main():
+    # /kaggle/tmp exists on TPU images but not on GPU ones; it is a plain
+    # directory on the ~1TB root overlay, so creating it is safe and keeps the
+    # 19.5 GB checkpoint off the 20 GB /kaggle/working loop device.
     os.makedirs(CKPT, exist_ok=True)
     files = manifest()
     log(f"manifest: {len(files)} files, {sum(files.values())/1e9:.1f} GB")
