@@ -1,14 +1,18 @@
-# Phase 0 / cell 0 — ntfy command relay, v2 (429-hardened)
+# Phase 0 / cell 0 — ntfy command relay, v3 (429-hardened + account auth)
 #
 # v1 died on ntfy's anonymous rate limit: the idle loop polled ~1x/second and
-# one 429 on publish crashed the agent (seen live). v2:
+# one 429 on publish crashed the agent (seen live). v2 fixed the mechanics.
+# v3 adds the account token: a Kaggle VM's shared egress IP is rate-limited by
+# ntfy as anonymous even when WE behave — authenticated requests lift the cap
+# (this fixed the GPU session's "results never arrive" wall, seen live).
 #   - receives commands on a BLOCKING stream (no polling at all)
 #   - publishes with retry/backoff honoring Retry-After; failed publishes
 #     wait in a pending queue instead of crashing
 #   - persists seen-ids + since to /kaggle/working/agent_state.json, so a
-#     restarted agent never re-executes old commands (v1 re-ran `id 2` and
-#     double-launched run_all.py)
-# Pure stdlib, port 443 only, no accounts. Topics are the only credential.
+#     restarted agent never re-executes old commands
+#   - Bearer token on BOTH publish and the command stream
+# Pure stdlib, port 443 only. FRESH TOPIC PAIR PER SESSION — a second agent on
+# the same topics executes another session's commands (seen live).
 
 import json
 import os
@@ -17,11 +21,19 @@ import time
 import urllib.error
 import urllib.request
 
-CMD_TOPIC = "ktl-cmd-41cbd7210e5b"
-OUT_TOPIC = "ktl-out-f28de123fc89"
+CMD_TOPIC = "ktl-cmd-6d59c49709ad"   # TPU session 2026-09-20 (fresh pair)
+OUT_TOPIC = "ktl-out-61a425e8277f"
+NTFY_TOKEN = "PASTE_YOUR_NTFY_TOKEN"  # the same ntfy account token used before
 STATE = "/kaggle/working/agent_state.json"
 CMD_TIMEOUT_S = 900
 OUT_TRUNC = 3000
+
+
+def hdr():
+    h = {"Content-Type": "application/json"}
+    if NTFY_TOKEN and not NTFY_TOKEN.startswith("PASTE_"):
+        h["Authorization"] = f"Bearer {NTFY_TOKEN}"
+    return h
 
 
 def post(obj):
@@ -30,7 +42,8 @@ def post(obj):
     for attempt in range(6):
         try:
             with urllib.request.urlopen(
-                    urllib.request.Request(f"https://ntfy.sh/{OUT_TOPIC}", data=data),
+                    urllib.request.Request(f"https://ntfy.sh/{OUT_TOPIC}",
+                                           data=data, headers=hdr()),
                     timeout=60) as r:
                 r.read()
             return True
@@ -77,8 +90,8 @@ def save():
         pass
 
 
-if post({"agent": "up-v2", "note": "streaming receive, 429-hardened"}):
-    print(f"agent online v2  cmds: ntfy.sh/{CMD_TOPIC}", flush=True)
+if post({"agent": "up-v3-auth", "session": "tpu-flashnext-20260920"}):
+    print(f"agent online v3 (authenticated)  cmds: ntfy.sh/{CMD_TOPIC}", flush=True)
 
 pending = []
 
@@ -92,7 +105,8 @@ def flush():
 while True:
     flush()
     try:
-        req = urllib.request.Request(f"https://ntfy.sh/{CMD_TOPIC}/json?since={since}")
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{CMD_TOPIC}/json?since={since}", headers=hdr())
         with urllib.request.urlopen(req, timeout=600) as r:
             for raw in r:  # ntfy streams lines, keep-alives keep it warm
                 try:
