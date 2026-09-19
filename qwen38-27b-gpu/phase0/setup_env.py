@@ -78,9 +78,10 @@ def torch_cuda_variant(driver_cuda):
 
 
 def main():
-    # 0. GPUs must exist
+    # 0. GPUs must exist (rows say "Tesla T4"; the header's single "NVIDIA-SMI"
+    #    is why counting "NVIDIA" saw 1 instead of 2 — seen live)
     out = subprocess.run(["nvidia-smi"], capture_output=True, text=True).stdout
-    gpus = out.count("NVIDIA")
+    gpus = len(re.findall(r"Tesla T4", out))
     print(out[:1200], flush=True)
     if gpus < 2:
         print(f"!! expected 2 T4s, nvidia-smi shows {gpus}")
