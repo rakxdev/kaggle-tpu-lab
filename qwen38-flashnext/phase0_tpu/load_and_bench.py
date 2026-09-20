@@ -11,6 +11,9 @@ import time
 
 os.environ.setdefault("TPU_BACKEND_TYPE", "jax")
 os.environ["VLLM_XLA_CACHE_PATH"] = "/kaggle/working/xla_cache"
+# The runtime venv (/tmp/venv, see venv_setup.py) ships its own libtpu; don't
+# let the image's TPU_LIBRARY_PATH override it (serve_qwen38.py's rule).
+os.environ.pop("TPU_LIBRARY_PATH", None)
 CKPT = "/kaggle/tmp/ckpt"
 CTX = 32768  # first-load context: small on purpose; 262k is a later step
 
