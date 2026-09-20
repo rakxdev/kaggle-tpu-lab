@@ -105,17 +105,19 @@ def main():
                "jax[tpu]==0.11.0"], "uv-engine"):
         print("!! engine stack install failed")
         raise SystemExit(1)
-    # 1b. torchaudio matched to whatever torch landed (transformers imports it
-    #     unconditionally; a mismatched native lib dies on undefined symbols —
-    #     the fork's own note; they pin 2.10.0 against torch 2.10).
+    # 1b. torchaudio matched to whatever torch landed — AND from the CPU
+    #     index: PyPI's default torchaudio wheel is CUDA-built and its native
+    #     lib fails to dlopen against CPU torch (seen live: "Could not load
+    #     this library: .../torchaudio/lib/libtorchaudio.so").
     r = subprocess.run([PY, "-c",
                         "import importlib.metadata as md; "
                         "print('.'.join(md.version('torch').split('.')[:2]))"],
                        capture_output=True, text=True)
     tmaj = r.stdout.strip()
-    print(f"   torch in venv: {tmaj}.x — pinning torchaudio to match", flush=True)
+    print(f"   torch in venv: {tmaj}.x — pinning torchaudio (CPU build) to match", flush=True)
     if not sh([sys.executable, "-m", "uv", "pip", "install", "--python", PY,
-               f"torchaudio=={tmaj}.0"], "uv-torchaudio"):
+               "--index-url", "https://download.pytorch.org/whl/cpu",
+               f"torchaudio=={tmaj}.0+cpu"], "uv-torchaudio"):
         print("!! torchaudio pin failed (non-fatal — continuing)")
     # 1c. vllm --no-deps (its full tree conflicts with tpu-inference on numba)
     #     + the fork's curated runtime set.
@@ -130,13 +132,13 @@ def main():
     print("STEP 2  fork overlay inside the venv (fork_apply.py verbatim)")
     print("=" * 68)
     r = subprocess.run([PY, "-c",
-                        "import tpu_inference, os; "
-                        "print(os.path.dirname(tpu_inference.__file__))"],
+                        "import sysconfig; "
+                        "print(sysconfig.get_paths()['purelib'])"],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        print("!! cannot locate tpu_inference in the venv:", r.stderr[-300:])
+        print("!! cannot locate the venv's site-packages:", r.stderr[-300:])
         raise SystemExit(1)
-    base = Path(r.stdout.strip())
+    base = Path(r.stdout.strip()) / "tpu_inference"
     src = Path(FORK) / "tpu_inference" / "models" / "jax" / "qwen4_exp"
     dst = base / "models" / "jax" / "qwen4_exp"
     if not src.is_dir():
