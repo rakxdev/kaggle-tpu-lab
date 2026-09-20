@@ -92,6 +92,7 @@ def main():
     print("=" * 68)
     print("STEP 1  uv venv at", VENV, "(the serve_qwen38.py recipe)")
     print("=" * 68)
+    shutil.rmtree(VENV, ignore_errors=True)  # rebuild fresh, every time
     if not (sh([sys.executable, "-m", "pip", "install", "-q", "uv"], "pip-uv")
             and sh([sys.executable, "-m", "uv", "venv", VENV,
                     "--python", sys.executable], "uv-venv")):
