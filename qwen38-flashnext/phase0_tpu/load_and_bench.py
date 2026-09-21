@@ -8,12 +8,17 @@ First run pays full XLA compile (no cache yet) — expect a long load.
 
 import os
 import time
+from pathlib import Path
 
 os.environ.setdefault("TPU_BACKEND_TYPE", "jax")
 os.environ["VLLM_XLA_CACHE_PATH"] = "/kaggle/working/xla_cache"
 # The runtime venv (/tmp/venv, see venv_setup.py) ships its own libtpu; don't
 # let the image's TPU_LIBRARY_PATH override it (serve_qwen38.py's rule).
 os.environ.pop("TPU_LIBRARY_PATH", None)
+# Tell tpu_heartbeat.py the bench owns the TPU now (its touch would contend
+# for /dev/vfio/0 with the engine). Kaggle's idle-stop is what killed the
+# 2026-09-20 session, so the heartbeat runs before this — and stands down.
+Path("/tmp/tpu_in_use").write_text("1")
 CKPT = "/kaggle/tmp/ckpt"
 CTX = 32768  # first-load context: small on purpose; 262k is a later step
 
