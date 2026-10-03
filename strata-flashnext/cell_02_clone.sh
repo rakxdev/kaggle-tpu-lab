@@ -32,22 +32,23 @@ else
 fi
 echo "strata: $(git -C Strata log --oneline -1 | head -c 70)"
 
-echo "== 3. venv-capable python =="
-if ! /usr/bin/python3 -c 'import sys, venv, ensurepip; assert sys.version_info >= (3, 10)' 2>/dev/null; then
-  echo "installing python3-venv via apt (one-time, ~1 min)..."
-  apt-get install -y -qq python3 python3-venv python3-pip 2>/dev/null \
-    || sudo apt-get install -y -qq python3 python3-venv python3-pip
+echo "== 3. Strata .venv via virtualenv (no ensurepip needed) =="
+# Kaggle's pythons can't venv: system 3.13 lacks ensurepip, and even the apt
+# 3.12 ships a broken one on this image (seen live 2026-10-04 after a clean
+# python3.12-venv install). virtualenv seeds pip from its own bundled wheels,
+# bypassing ensurepip entirely; Strata's setup.sh adopts any existing
+# .venv/bin/python that has pip (setup.sh lines 13-14) and skips its own
+# selection loop. Strata requires python >= 3.10; the system 3.13 qualifies.
+if [ ! -x Strata/.venv/bin/python ] || ! Strata/.venv/bin/python -m pip --version >/dev/null 2>&1; then
+  rm -rf Strata/.venv
+  python3 -m pip install -q virtualenv || pip install -q virtualenv
+  python3 -m virtualenv -q Strata/.venv || virtualenv -q Strata/.venv
 fi
-/usr/bin/python3 -c 'import sys, venv, ensurepip; print("venv-capable python:", sys.version.split()[0])' \
-  || { echo "!! /usr/bin/python3 still not venv-capable — paste me this output"; exit 1; }
-if [ ! -x Strata/.venv/bin/python ]; then
-  /usr/bin/python3 -m venv Strata/.venv \
-    && Strata/.venv/bin/python -m pip --version >/dev/null 2>&1 \
-    && echo "Strata .venv ready (setup.sh will adopt it as-is)" \
-    || { echo "!! .venv creation failed — paste me this output"; exit 1; }
-else
-  echo "Strata .venv already present — keeping it"
-fi
+Strata/.venv/bin/python -c 'import sys; assert sys.version_info >= (3, 10); print("venv python:", sys.version.split()[0])' \
+  || { echo "!! .venv python bad — paste me this output"; env | grep -i "^PYTHON"; exit 1; }
+Strata/.venv/bin/python -m pip --version >/dev/null 2>&1 \
+  || { echo "!! .venv has no pip — paste me this output"; exit 1; }
+echo "Strata .venv ready (setup.sh will adopt it as-is)"
 
 echo "== 4. GPU heartbeat =="
 cat > /kaggle/working/gpu_heartbeat.py <<'EOF'
