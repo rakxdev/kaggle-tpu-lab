@@ -8,7 +8,7 @@ cd /kaggle/working/Strata || exit 1
 # this is belt-and-braces only.
 PATH=/usr/bin:$PATH nohup ./setup.sh --setup --yes \
   --family coder --model IQ1_M \
-  --gguf-dir /kaggle/tmp/gguf-coder \
+  --gguf-dir /kaggle/tmp/gguf-coder/IQ1_M \
   --models-dir /kaggle/tmp/strata-data \
   --gpus 0,1 --port 8080 > /kaggle/working/strata_setup.log 2>&1 &
 echo "SETUP LAUNCHED — poll with cell_05b_status.sh"
