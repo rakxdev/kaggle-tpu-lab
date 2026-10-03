@@ -9,7 +9,7 @@ cd /kaggle/working/Strata || exit 1
 # must win over /usr/local's ensurepip-less 3.13. With cell 2's .venv in place
 # this is belt-and-braces only.
 PATH=/usr/bin:$PATH nohup ./setup.sh --setup --yes \
-  --family coder --model IQ1_M \
+  --family coder --model IQ1_M --low-ram mmap \
   --gguf-dir /kaggle/tmp/gguf-coder/IQ1_M \
   --models-dir /kaggle/working/strata-data \
   --gpus 0,1 --port 8080 > /kaggle/working/strata_setup.log 2>&1 &
