@@ -48,6 +48,10 @@ Strata/.venv/bin/python -c 'import sys; assert sys.version_info >= (3, 10); prin
   || { echo "!! .venv python bad — paste me this output"; env | grep -i "^PYTHON"; exit 1; }
 Strata/.venv/bin/python -m pip --version >/dev/null 2>&1 \
   || { echo "!! .venv has no pip — paste me this output"; exit 1; }
+# Kaggle's sitecustomize hook imports wrapt on every interpreter start;
+# inside the venv it is absent and prints a scary (but harmless) error on
+# every step of setup. One wheel silences it.
+Strata/.venv/bin/python -m pip install -q wrapt 2>/dev/null
 echo "Strata .venv ready (setup.sh will adopt it as-is)"
 
 echo "== 4. GPU heartbeat =="
