@@ -12,11 +12,11 @@ Anthropic APIs on one port.
 
 | Cell | File | Job | Time |
 |---|---|---|---|
-| 1 | `cell_01_report.sh` | machine report (2x T4, driver, RAM, disk, venv) | 5 s |
-| 2 | `cell_02_clone.sh` | clone Strata into /kaggle/working + **arm the GPU heartbeat** (idle-stop protection — this killed our TPU session once) | 20 s |
+| 1 | `cell_01_report.sh` | machine report (2x T4, driver, RAM, disk, both pythons) | 5 s |
+| 2 | `cell_02_clone.sh` | **clean-pull this kit** (hard reset + delete untracked, so every driver fix lands clean) + clone/update Strata + venv-capable python + pre-build Strata's `.venv` + arm the GPU heartbeat | 1–2 min |
 | 3 | `cell_03_creds.py` | paste HF + ngrok tokens inline (go to /tmp only) + verify | 30 s |
-| 4 | `cell_04_download.py` | Coder GGUF (58.4 GB) via hf_transfer to /kaggle/tmp — resumable | 15–25 min |
-| 5 | `cell_05_setup.sh` (+ `cell_05b_status.sh` to poll) | setup: venv + ready-made engine + MTP draft + prepare | 20–40 min |
+| 4 | `cell_04_download.py` | Coder GGUF (58.4 GB) via hf_transfer to /kaggle/tmp — resumable, deps auto-installed | 15–25 min |
+| 5 | `cell_05_setup.sh` (+ `cell_05b_status.sh` to poll) | setup: engine + MTP draft + prepare (uses the pre-built `.venv`) | 20–40 min |
 | 6 | `cell_06_smoke.py` | local health + proof + first tok/s | 1 min |
 | 7 | `cell_07_endpoint.sh` | **stable ngrok domain** + API key + keepalive watchdog | 1 min |
 
@@ -26,6 +26,11 @@ Run pattern from the notebook (repo already cloned by cell 2):
 !bash /kaggle/working/kaggle-tpu-lab/strata-flashnext/cell_01_report.sh
 ```
 (.py cells: `!python3 /kaggle/working/kaggle-tpu-lab/strata-flashnext/cell_04_download.py`)
+
+**Re-running after a driver fix:** just run cell 2 again — it hard-resets the
+kit repo and deletes untracked files, so the pushed fixes replace everything
+cleanly. Your Strata checkout, `.venv`, API key and logs are outside the repo
+dir and survive untouched.
 
 **The endpoint** is a static ngrok domain — same URL every session, both APIs
 (OpenAI `/v1` + Anthropic `/v1/messages`, streaming + tools — the server speaks

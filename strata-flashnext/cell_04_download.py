@@ -2,7 +2,14 @@
 # hf_transfer = multi-stream (the fast lane); resumable, so re-running the
 # cell continues where it stopped. Target: /kaggle/tmp/gguf-coder (1 TB disk).
 # ~15-25 min on Kaggle's pipe. The heartbeat keeps the session alive meanwhile.
-import os, time
+import importlib, os, subprocess, sys, time
+
+# system python (3.13) needs these two for the fast lane; install only if absent
+for _mod, _pkg in [("huggingface_hub", "huggingface_hub"), ("hf_transfer", "hf_transfer")]:
+    try:
+        importlib.import_module(_mod)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", _pkg])
 
 TOKEN = open("/tmp/hf_token").read().strip()
 os.environ["HF_TOKEN"] = TOKEN

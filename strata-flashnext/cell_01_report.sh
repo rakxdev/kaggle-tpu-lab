@@ -5,6 +5,8 @@
 echo "== GPU =="; nvidia-smi | grep -E "Tesla|CUDA Version" || nvidia-smi
 echo "== RAM =="; free -g | head -2
 echo "== DISK =="; df -h / /kaggle/working /kaggle/tmp 2>/dev/null | tail -3
-echo "== PYTHON =="; python3 --version; python3 -c "import venv, ensurepip; print('venv OK')"
+echo "== PYTHON =="; python3 --version
+/usr/bin/python3 --version 2>/dev/null || echo "/usr/bin/python3: absent"
+/usr/bin/python3 -c "import ensurepip" 2>/dev/null && echo "/usr/bin/python3: venv-capable" || echo "/usr/bin/python3: needs python3-venv (cell 2 installs it)"
 echo "== CPU FLAGS =="; grep -o -m1 "avx2" /proc/cpuinfo | head -1; nproc
 echo "== GIT =="; git --version

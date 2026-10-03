@@ -3,7 +3,10 @@
 # + MTP draft + prepare, in the background with a live log. Progress:
 # re-run cell_05b_status.sh any time.
 cd /kaggle/working/Strata || exit 1
-nohup ./setup.sh --setup --yes \
+# PATH prefix: setup.sh picks interpreters by PATH; the apt python (venv-capable)
+# must win over /usr/local's ensurepip-less 3.13. With cell 2's .venv in place
+# this is belt-and-braces only.
+PATH=/usr/bin:$PATH nohup ./setup.sh --setup --yes \
   --family coder --model IQ1_M \
   --gguf-dir /kaggle/tmp/gguf-coder \
   --models-dir /kaggle/tmp/strata-data \
