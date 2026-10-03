@@ -48,13 +48,22 @@ if missing:
         print(f"!! STILL missing after resume: {missing} — paste me this output")
         sys.exit(1)
 
-# the Xet chunk cache duplicates the payload — drop it once shards are verified
-cache = f"{DEST}/.cache"
-if os.path.isdir(cache):
-    saved = sum(os.path.getsize(os.path.join(r, f))
-                for r, _, fs in os.walk(cache) for f in fs)
-    subprocess.run(["rm", "-rf", cache])
-    print(f"freed Xet cache: {saved / 1e9:.1f} GB")
+# the Xet chunk cache lives in HF's default cache dir (~/.cache/huggingface),
+# NOT inside local_dir — the first cleanup deleted the wrong one (0.0 GB freed,
+# seen live 2026-10-04) while the real one held the duplicate payload. Drop it
+# once the shards are verified; the payload itself stays.
+import glob as _glob
+freed = 0.0
+for cache in ("/root/.cache/huggingface/xet", "/root/.cache/huggingface/hub",
+              "/root/.cache/pip", os.path.expanduser("~/.cache/huggingface/xet"),
+              os.path.expanduser("~/.cache/huggingface/hub"), f"{DEST}/.cache"):
+    total = sum(os.path.getsize(p) for p in _glob.glob(f"{cache}/**", recursive=True)
+                if os.path.isfile(p))
+    if total > 1e6:
+        subprocess.run(["rm", "-rf", cache])
+        freed += total
+        print(f"freed {total / 1e9:.1f} GB: {cache}")
+print(f"cache cleanup total: {freed / 1e9:.1f} GB")
 
 print("shards verified byte-exact:")
 for n, s in EXPECTED.items():
