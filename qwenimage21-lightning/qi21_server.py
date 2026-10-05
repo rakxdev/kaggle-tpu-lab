@@ -51,7 +51,7 @@ import time
 
 import torch
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 WORK = pathlib.Path(os.environ.get("QI21_WORK", pathlib.Path.home() / "qwenimage21"))
@@ -69,6 +69,477 @@ GPU_LOCK = asyncio.Lock()
 app = FastAPI(title="Qwen-Image-2.1", version="1.0")
 PIPE = None
 BOOT_T = time.time()
+
+# The browser UI, embedded verbatim from the kit's qi21_ui.html (the canonical,
+# readable copy — this string must stay byte-identical to it; cell_06_serve.sh's
+# build step verifies). Served same-origin at / and /ui, which is why the UI
+# needs no CORS config and no separate host.
+UI_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen-Image-2.1</title>
+<style>
+  :root {
+    --bg: #0c0d10;
+    --surface: #14161b;
+    --surface-2: #191c23;
+    --border: #262a33;
+    --text: #e8eaf0;
+    --muted: #97a0b0;
+    --accent: #e8a33d;
+    --accent-ink: #171003;
+    --danger: #e5645f;
+    --ok: #6fbf8b;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .01em; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  #health { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #health .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+  #health.ok .dot { background: var(--ok); }
+
+  main {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 0;
+    height: calc(100vh - 49px);
+  }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    #canvas { min-height: 60vh; }
+  }
+
+  aside {
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  @media (max-width: 860px) { aside { border-right: 0; border-bottom: 1px solid var(--border); } }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > label { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+  .hint { font-size: 11px; color: var(--muted); }
+
+  textarea, input[type="number"], input[type="password"], select {
+    width: 100%;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font: inherit;
+  }
+  textarea { resize: vertical; min-height: 84px; }
+  textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .row .tight { flex: 0 0 auto; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius);
+    padding: 5px 9px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+  #generate {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: 0;
+    border-radius: var(--radius);
+    padding: 11px 16px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  #generate[disabled] { opacity: .55; cursor: wait; }
+  kbd {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0 5px; font-size: 11px; font-family: inherit;
+  }
+
+  #canvas {
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+    overflow: auto;
+  }
+  #stage { position: relative; max-width: 100%; }
+  #stage img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 200px);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+  #stage img.busy { visibility: hidden; }
+
+  #shimmer {
+    position: absolute; inset: 0;
+    border-radius: 12px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  #shimmer::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 30%, var(--surface-2) 50%, transparent 70%);
+    animation: sweep 1.4s infinite;
+  }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+  #busybox {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; gap: 4px;
+    align-items: center; justify-content: center;
+    text-align: center;
+  }
+  #busybox .t { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #busybox .s { color: var(--muted); font-size: 12px; }
+
+  .meta { display: flex; gap: 14px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .meta button {
+    background: none; border: 1px solid var(--border); color: var(--text);
+    border-radius: var(--radius); padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .meta button:hover { border-color: var(--accent); }
+
+  #empty { color: var(--muted); text-align: center; max-width: 380px; }
+  #empty .big { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+
+  #statusbar { min-height: 20px; font-size: 12px; }
+  #statusbar.error { color: var(--danger); }
+  #statusbar.info  { color: var(--muted); }
+
+  #history {
+    display: flex; gap: 8px; overflow-x: auto;
+    padding: 10px 20px 16px;
+  }
+  #history button {
+    flex: 0 0 auto; padding: 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); cursor: pointer; overflow: hidden;
+  }
+  #history button[aria-current="true"] { border-color: var(--accent); }
+  #history img { display: block; height: 72px; width: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Qwen-Image-2.1</h1>
+  <span class="sub">full BF16 · single H200</span>
+  <span class="spacer"></span>
+  <span id="health" class=""><span class="dot"></span><span id="health-text">checking…</span></span>
+</header>
+
+<main>
+  <aside>
+    <div class="field">
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" autofocus
+        placeholder="A neon shop sign that reads QWEN IMAGE, rainy night, reflections on wet pavement"></textarea>
+      <span class="hint">Ctrl + Enter to generate</span>
+    </div>
+
+    <div class="field">
+      <label for="negative">Negative prompt <span class="hint">(ignored unless CFG &gt; 1)</span></label>
+      <input type="text" id="negative" placeholder="optional">
+    </div>
+
+    <div class="field">
+      <label id="size-label">Size</label>
+      <div class="chips" role="group" aria-labelledby="size-label">
+        <button type="button" class="chip" data-w="1024" data-h="1024" aria-pressed="true">1:1 · 1024</button>
+        <button type="button" class="chip" data-w="1216" data-h="832" aria-pressed="false">3:2</button>
+        <button type="button" class="chip" data-w="1344" data-h="768" aria-pressed="false">16:9</button>
+        <button type="button" class="chip" data-w="768" data-h="1344" aria-pressed="false">9:16</button>
+        <button type="button" class="chip" data-w="2048" data-h="2048" aria-pressed="false">2K</button>
+      </div>
+      <div class="row">
+        <div class="field"><label for="width">Width</label><input type="number" id="width" value="1024" min="64" max="2048" step="32"></div>
+        <div class="field"><label for="height">Height</label><input type="number" id="height" value="1024" min="64" max="2048" step="32"></div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="steps">Steps: <span id="steps-val">28</span></label>
+      <input type="range" id="steps" min="4" max="50" step="1" value="28">
+      <span class="hint">Quality dial — cost scales linearly. 28 is the balance point.</span>
+    </div>
+
+    <div class="field">
+      <label for="cfg">CFG</label>
+      <input type="number" id="cfg" value="1.0" min="1" max="8" step="0.5">
+      <span class="hint">Model default is 1.0 (guidance-free). Above 1 runs the DiT twice per step.</span>
+    </div>
+
+    <div class="field">
+      <label for="seed">Seed</label>
+      <div class="row">
+        <input type="number" id="seed" value="-1" step="1">
+        <button type="button" class="chip tight" id="use-last" title="Use the seed of the last image">last</button>
+        <button type="button" class="chip tight" id="randomize" title="Random seed (-1)">rnd</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="key">API key</label>
+      <input type="password" id="key" placeholder="qi21-…" autocomplete="off">
+      <span class="hint">Stored in this browser only (localStorage).</span>
+    </div>
+
+    <button id="generate">Generate</button>
+    <div id="statusbar" role="status" aria-live="polite"></div>
+  </aside>
+
+  <section>
+    <div id="canvas">
+      <div id="stage" hidden>
+        <img id="image" alt="Generated image">
+        <div id="shimmer" hidden></div>
+        <div id="busybox" hidden>
+          <div class="t" id="elapsed">0.0s</div>
+          <div class="s" id="busy-sub">denoising…</div>
+        </div>
+      </div>
+      <div id="empty">
+        <div class="big">Nothing generated yet</div>
+        <div>Write a prompt, pick a size, hit Generate.</div>
+        <div style="margin-top:6px"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> works from the prompt box.</div>
+      </div>
+    </div>
+    <div class="meta" id="meta" hidden>
+      <span id="meta-info"></span>
+      <span class="tight"></span>
+      <button type="button" id="download">Download PNG</button>
+    </div>
+    <div id="history" hidden></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+var $ = function (id) { return document.getElementById(id); };
+var els = {
+  prompt: $("prompt"), negative: $("negative"), width: $("width"), height: $("height"),
+  steps: $("steps"), stepsVal: $("steps-val"), cfg: $("cfg"), seed: $("seed"),
+  key: $("key"), generate: $("generate"), statusbar: $("statusbar"),
+  stage: $("stage"), image: $("image"), shimmer: $("shimmer"), busybox: $("busybox"),
+  elapsed: $("elapsed"), busySub: $("busy-sub"), empty: $("empty"),
+  meta: $("meta"), metaInfo: $("meta-info"), download: $("download"),
+  history: $("history"), health: $("health"), healthText: $("health-text"),
+  useLast: $("use-last"), randomize: $("randomize"),
+};
+
+var busy = false, timer = null, t0 = 0;
+var gallery = [];   // {url, seed, width, height, steps, seconds}
+var current = -1;
+
+// ---- api key: persisted locally, never sent anywhere but this origin ----
+els.key.value = localStorage.getItem("qi21_key") || "";
+els.key.addEventListener("change", function () {
+  localStorage.setItem("qi21_key", els.key.value.trim());
+});
+
+// ---- health ping ----
+function ping() {
+  fetch("/health").then(function (r) { return r.json(); }).then(function (d) {
+    els.health.className = d.status === "ok" ? "ok" : "";
+    els.healthText.textContent = d.status === "ok"
+      ? "live · " + d.resident_gib + " GiB resident" + (d.busy ? " · busy" : " · idle")
+      : "loading";
+  }).catch(function () {
+    els.health.className = "";
+    els.healthText.textContent = "unreachable";
+  });
+}
+ping(); setInterval(ping, 20000);
+
+// ---- size chips ----
+document.querySelectorAll(".chip[data-w]").forEach(function (chip) {
+  chip.addEventListener("click", function () {
+    document.querySelectorAll(".chip[data-w]").forEach(function (c) { c.setAttribute("aria-pressed", "false"); });
+    chip.setAttribute("aria-pressed", "true");
+    els.width.value = chip.dataset.w;
+    els.height.value = chip.dataset.h;
+  });
+});
+els.width.addEventListener("input", function () {
+  document.querySelectorAll(".chip[data-w]").forEach(function (c) { c.setAttribute("aria-pressed", "false"); });
+});
+els.steps.addEventListener("input", function () { els.stepsVal.textContent = els.steps.value; });
+
+els.useLast.addEventListener("click", function () {
+  if (gallery.length) els.seed.value = gallery[gallery.length - 1].seed;
+});
+els.randomize.addEventListener("click", function () { els.seed.value = -1; });
+
+function setStatus(msg, cls) {
+  els.statusbar.textContent = msg || "";
+  els.statusbar.className = cls || "";
+}
+
+// ---- generate ----
+function generate() {
+  if (busy) return;
+  var prompt = els.prompt.value.trim();
+  var key = els.key.value.trim();
+  if (!prompt) { setStatus("Write a prompt first.", "error"); els.prompt.focus(); return; }
+  if (!key) { setStatus("Paste the API key (it is in the cell 6 banner).", "error"); els.key.focus(); return; }
+
+  busy = true;
+  els.generate.disabled = true;
+  els.generate.textContent = "Generating…";
+  els.empty.hidden = true;
+  els.image.classList.add("busy");
+  els.shimmer.hidden = false;
+  els.busybox.hidden = false;
+  els.stage.hidden = false;
+  setStatus("", "");
+
+  var steps = parseInt(els.steps.value, 10) || 28;
+  t0 = performance.now();
+  timer = setInterval(function () {
+    var dt = (performance.now() - t0) / 1000;
+    els.elapsed.textContent = dt.toFixed(1) + "s";
+    els.busySub.textContent = "denoising · " + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
+  }, 100);
+
+  var body = {
+    prompt: prompt,
+    width: parseInt(els.width.value, 10) || 1024,
+    height: parseInt(els.height.value, 10) || 1024,
+    steps: steps,
+    cfg: parseFloat(els.cfg.value) || 1.0,
+    seed: parseInt(els.seed.value, 10),
+  };
+  if (els.negative.value.trim() && body.cfg > 1) body.negative_prompt = els.negative.value.trim();
+
+  fetch("/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + key,
+      "ngrok-skip-browser-warning": "true"
+    },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    return r.json().then(function (d) { return { status: r.status, data: d }; });
+  }).then(function (res) {
+    clearInterval(timer); busy = false;
+    els.generate.disabled = false;
+    els.generate.textContent = "Generate";
+    els.shimmer.hidden = true;
+    els.busybox.hidden = true;
+    els.image.classList.remove("busy");
+
+    if (res.status !== 200) {
+      var msg = (res.data && (res.data.error || res.data.detail)) || ("HTTP " + res.status);
+      setStatus(msg + (res.status === 429 ? " — the card is busy; retry in a few seconds." : ""), "error");
+      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+      return;
+    }
+
+    var d = res.data;
+    var b64 = d.data[0].b64_json;
+    var bin = atob(b64), n = bin.length, bytes = new Uint8Array(n);
+    for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+    var url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+
+    els.image.src = url;
+    els.stage.hidden = false;
+    current = gallery.length;
+    gallery.push({ url: url, seed: d.seed, width: d.width, height: d.height, steps: d.steps, seconds: d.seconds, prompt: prompt });
+    els.meta.hidden = false;
+    els.metaInfo.textContent = d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
+    els.download.hidden = false;
+    renderHistory();
+    setStatus("done in " + d.seconds + " s (" + d.seconds_per_step + " s/step)", "info");
+  }).catch(function (err) {
+    clearInterval(timer); busy = false;
+    els.generate.disabled = false;
+    els.generate.textContent = "Generate";
+    els.shimmer.hidden = true; els.busybox.hidden = true;
+    els.image.classList.remove("busy");
+    setStatus("request failed: " + err.message, "error");
+  });
+}
+
+els.generate.addEventListener("click", generate);
+els.prompt.addEventListener("keydown", function (e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") generate();
+});
+
+// ---- download + history ----
+els.download.addEventListener("click", function () {
+  if (current < 0) return;
+  var g = gallery[current];
+  var a = document.createElement("a");
+  a.href = g.url;
+  a.download = "qwen21_" + g.seed + "_" + g.width + "x" + g.height + ".png";
+  a.click();
+});
+
+function renderHistory() {
+  if (gallery.length < 1) { els.history.hidden = true; return; }
+  els.history.hidden = false;
+  els.history.innerHTML = "";
+  gallery.forEach(function (g, i) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-label", "image " + (i + 1) + ", seed " + g.seed);
+    b.setAttribute("aria-current", i === current ? "true" : "false");
+    var img = document.createElement("img");
+    img.src = g.url; img.alt = "";
+    b.appendChild(img);
+    b.addEventListener("click", function () {
+      current = i;
+      els.image.src = g.url;
+      els.stage.hidden = false; els.empty.hidden = true;
+      els.meta.hidden = false;
+      els.metaInfo.textContent = g.width + "×" + g.height + " · " + g.steps + " steps · " + g.seconds + " s · seed " + g.seed;
+      renderHistory();
+    });
+    els.history.appendChild(b);
+  });
+}
+</script>
+</body>
+</html>"""
+
+
+@app.get("/ui")
+@app.get("/")
+async def ui():
+    return HTMLResponse(UI_HTML)
 
 
 class GenerateRequest(BaseModel):
