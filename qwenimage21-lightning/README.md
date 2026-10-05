@@ -263,22 +263,49 @@ retires the old one.
   text is exactly what degrades at low step counts with no CFG. Do not
   conclude "20 steps is unusable" from that prompt — re-test a scene prompt.
 
+## Measured on the live session (H200, 2026-10-05)
+
+Full BF16, no offload, `use_kv_cache=True`, CFG 1, Euler FlowMatch. Cell 4 smoke:
+
+```
+LOADED in 6.5s — 30.2 GiB resident of 139.8 GiB
+GENERATE 6.9s at 40 steps = 0.17 s/step     (1024x1024)
+VRAM peak 36.8 GiB
+```
+
+Cell 5 bench (warm, same prompt/seed throughout):
+
+| Arm | Steps | Res | Seconds | s/step |
+|---|---|---|---|---|
+| cold | 40 | 1024² | 7.4 | 0.18 |
+| **warm** | **40** | **1024²** | **5.9** | **0.15** |
+| sweep | 20 / 28 / 40 | 1024² | 3.0 / 4.2 / 5.9 | 0.15 flat |
+| res | 20 | 512² | 0.9 | 0.05 |
+| res | 20 | 768² | 1.8 | 0.09 |
+| res | 20 | 1312² (sweep asked 1328; resized, must be ÷32) | 5.4 | 0.27 |
+| res | 20 | 2048² | 15.8 | 0.79 |
+
+Reading: s/step is **flat across step counts** — steps are a pure quality dial;
+1024→2048 costs ~5.3× (4× pixels, slightly superlinear from attention); VRAM at
+2K peaks 56.5 GiB of 139.8; cold-vs-warm overhead is only **1.5 s**. At
+$3.82/h: **$0.0063 per 1024²/40-step image** (~10 images/min warm), $0.017 per
+2K/20-step image — 8–10× cheaper than hosted APIs ($0.053–0.134), and ~25×
+faster than the Kaggle 2×T4 INT8 route (147 s).
+
+Endpoint proof (cell 6c, run from a machine outside the Studio, over ngrok):
+health 200; no/bad token → 401 both; one real 512²/20-step generation 200 in
+2.83 s server-side (4.6 s wall incl. tunnel), PNG 481 KiB, pixels healthy;
+4 concurrent requests → all 200, fully serialised, no 429 needed, no corruption.
+
 ## Not confirmed
 
-Filled in as the real run reports them — do not treat these as measurements:
-
-- **This card's actual s/step and s/image.** No published 40-step BF16
-  Qwen-Image-2.1 latency for an RTX PRO 6000 was found. The only diffusion
-  datapoint located for this class of card was ~4 s for a 1024² image with an
-  **8-step distilled LoRA** in ComfyUI — not comparable to the 40-step base.
-  Cell 5 produces the real figure.
-- **Native FP8 does not help the BF16 path.** The card has FP8 (2 PFLOPS) and
-  FP4 (4 PFLOPS) tensor cores, but `QwenImage21Pipeline` has **no FP8 path at
-  all** — FP8 exists only in third-party weights and vLLM-Omni. Do not expect
-  the BF16 diffusers pipeline to use those cores.
+- **Native FP8 does not help the BF16 path.** The card has FP8/FP4 tensor
+  cores, but `QwenImage21Pipeline` has **no FP8 path at all** — FP8 exists
+  only in third-party weights and vLLM-Omni.
 - **Whether 20 steps is visually acceptable on 2.1.** Cell 5 writes a PNG per
   step count at a fixed prompt and seed; that judgement is yours to make by
-  looking.
+  looking. (The demo prompt is a text-rendering test — the hardest case for
+  low steps.)
 - **Whether non-`fullgraph` compile works at all** (graph breaks instead of a
   hard error). The 2.1 docs page *does* recommend `pipe.transformer.compile()`
   and `QwenImage21FlexAttnProcessor` "once the model is compiled", which
