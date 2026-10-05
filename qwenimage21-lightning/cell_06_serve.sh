@@ -733,19 +733,38 @@ def _need_gib(params: dict) -> float:
 
 def claim_next(worker: str, free_gib: float):
     """VRAM-aware first-fit claim: walk queued jobs in FIFO order and take the
-    first whose estimated transient fits the currently-free VRAM. Serialized
-    by BEGIN IMMEDIATE across processes. Effect: big renders (2K) WAIT for calm
-    VRAM instead of OOM-churning; small jobs behind them still flow (no
-    head-of-line blocking beyond actual memory need)."""
+    first whose estimated transient fits the currently-free VRAM MINUS the full
+    estimated need of every job already rendering.
+
+    Why minus-inflight: free VRAM is read before an in-flight render has
+    allocated its transient (allocation ramps over seconds). Two dispatchers
+    can both see "43 free" and both claim 2K jobs that collide at the peak —
+    seen live 2026-10-06: 134 OOMs, card peaked at 138 GiB, when a 7x2K burst
+    raced a user's web request. Accounting inflight jobs at their FULL need
+    makes the gate conservative: a second 2K waits until the first finishes,
+    while small jobs (whose need fits the remaining margin) still flow.
+
+    Serialized by BEGIN IMMEDIATE across processes. Queued jobs never fail —
+    they wait for a calm card."""
     with db() as c:
         c.execute("BEGIN IMMEDIATE")
+        inflight = c.execute(
+            "SELECT params FROM jobs WHERE state='rendering'"
+        ).fetchall()
+        inflight_need = 0.0
+        for r in inflight:
+            try:
+                inflight_need += _need_gib(json.loads(r["params"]))
+            except Exception:  # noqa: BLE001 — malformed row: assume worst
+                inflight_need += 30.0
+        effective_free = free_gib - inflight_need
         rows = c.execute(
             "SELECT seq,job_id,params FROM jobs WHERE state='queued' ORDER BY seq"
         ).fetchall()
         picked = None
         for row in rows:
             params = json.loads(row["params"])
-            if _need_gib(params) <= free_gib:
+            if _need_gib(params) <= effective_free:
                 picked = row
                 break
         if picked is None:
