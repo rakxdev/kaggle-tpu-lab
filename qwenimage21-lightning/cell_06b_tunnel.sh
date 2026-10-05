@@ -1,6 +1,13 @@
 #!/bin/sh
 # CELL 6b — expose the server publicly through ngrok, on the RESERVED domain.
 #
+# *** KNOWN LIMITATION: ngrok's free plan meters BANDWIDTH (1 GB/mo). A 2K PNG
+# *** is ~9-12 MB, so a few concurrent users exhaust it in minutes and every
+# *** visitor then hits ERR_NGROK_725 "Network bandwidth exceeded". Prefer
+# *** cell_06bb_tunnel_cf.sh (Cloudflare quick tunnel, no bandwidth cap, no
+# *** account). Use this ngrok cell only if you have a paid ngrok plan and
+# *** specifically want the stable reserved domain.
+#
 # *** THIS CELL MAKES IT PUBLIC. Anyone who learns the API key can spend your
 # *** credit through this URL. Only run it after cell 5's numbers convinced
 # *** you, and remember the model license: Qwen Research — non-commercial.

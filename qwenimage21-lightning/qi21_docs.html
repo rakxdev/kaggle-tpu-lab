@@ -395,9 +395,8 @@ you get a queue position and your turn comes in order.</div>
 <p>Every endpoint except <code class="inl">/health</code> and <code class="inl">/queue</code>
 requires a bearer token. Send it in the <code class="inl">Authorization</code> header;
 a missing or wrong token returns <b>401</b>.</p>
-<div class="note"><b>Browser clients:</b> requests made from JavaScript must also send
-the <code class="inl">ngrok-skip-browser-warning: true</code> header to bypass the
-tunnel's first-visit interstitial. Server-side clients (curl, SDKs) don't need it.</div>
+<div class="note"><b>Browser clients:</b> keep requests to this origin so CORS and the
+tunnel stay simple. Server-side clients (curl, SDKs) have no such constraint.</div>
 </section>
 
 <!-- ============================================================ POST /generate -->
@@ -675,6 +674,29 @@ three replicas on one NVIDIA H200.
 
 <script>
 "use strict";
+
+// ---- self-locating base URL ----
+// The page is served by the very server it documents, so the real origin is
+// whatever host the reader is on right now — ngrok, Cloudflare, or localhost.
+// Every example URL below carries the domain it was written with; rewrite them
+// all to the live origin so a tunnel swap can never leave stale copy behind.
+var BASE = window.location.origin;
+var CANON = document.querySelector("#base > span");
+if (CANON) {
+  var LEGACY = CANON.textContent.trim();
+  if (LEGACY && LEGACY !== BASE) {
+    document.querySelectorAll("pre").forEach(function (p) {
+      p.textContent = p.textContent.split(LEGACY).join(BASE);
+    });
+    document.querySelectorAll("[data-copy]").forEach(function (el) {
+      el.setAttribute("data-copy", el.getAttribute("data-copy").split(LEGACY).join(BASE));
+    });
+  }
+  CANON.textContent = BASE;
+  var canonBtn = CANON.parentElement.querySelector("button[data-copy]");
+  if (canonBtn) canonBtn.setAttribute("data-copy", BASE);
+}
+
 // ---- copy buttons ----
 document.querySelectorAll(".copy").forEach(function (btn) {
   btn.addEventListener("click", function () {
@@ -710,18 +732,19 @@ backdrop.addEventListener("click", function () { setDrawer(false); });
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape" && side.classList.contains("open")) { setDrawer(false); ham.focus(); }
 });
-// picking a destination closes the drawer and jumps straight there
-links.forEach(function (a) {
-  a.addEventListener("click", function () {
-    if (window.matchMedia("(max-width: 960px)").matches) setDrawer(false);
-  });
-});
 
 // ---- scroll-spy for the sidebar ----
 var links = Array.prototype.slice.call(document.querySelectorAll("nav.side a"));
 var sections = links.map(function (a) {
   return document.getElementById(a.getAttribute("href").slice(1));
 }).filter(Boolean);
+
+// picking a destination closes the drawer and jumps straight there
+links.forEach(function (a) {
+  a.addEventListener("click", function () {
+    if (window.matchMedia("(max-width: 960px)").matches) setDrawer(false);
+  });
+});
 
 function spy() {
   var fromTop = window.scrollY + 90;

@@ -91,7 +91,8 @@ from the image). Cell 2 handles both.
 | 4 | `cell_04_smoke.py` | one 1024×1024 image, the go/no-go proof | ~$0.20 |
 | 5 | `cell_05_bench.py` | cold vs warm, s/step, steps + resolution sweeps | ~$1–2 |
 | 6 | `cell_06_serve.sh` | **token-gated server + deadline watchdog** | ~$0.30 |
-| 6b | `cell_06b_tunnel.sh` | **ngrok tunnel — makes it PUBLIC** | $0 |
+| 6b | `cell_06b_tunnel.sh` | ngrok tunnel (**free plan caps bandwidth — see 6bb**) | $0 |
+| 6bb | `cell_06bb_tunnel_cf.sh` | **Cloudflare quick tunnel — makes it PUBLIC (preferred)** | $0 |
 | 6c | `cell_06c_proof.py` | end-to-end proof from outside the Studio | ~$0.15 |
 
 Run from the Studio terminal. Every `.sh` is directly executable; every `.py`
@@ -202,10 +203,17 @@ retires the old one.
 - **`!! nothing answering on 127.0.0.1:8080`** — the 33.1 GB load takes a
   minute. `tail -20 $HOME/qwenimage21/serve.log` and wait; only re-run cell 6
   if `MODEL_READY` is absent from the log.
-- **`!! no public URL in the log yet`** — ngrok was still starting. The tunnel
-  cell waits 12 s; re-run it (it kills the old tunnel first, so it is safe).
+- **`!! no public URL in the log yet`** — the tunnel was still starting. The
+  cell waits ~20 s; re-run it (it kills the old tunnel first, so it is safe).
 - **`!! ngrok rejected the token`** — authtoken pasted wrong. Get a fresh one
   from the ngrok dashboard.
+- **Visitors see `ERR_NGROK_725 Network bandwidth exceeded`** — ngrok's free
+  plan has a 1 GB/month cap and a 2K PNG is ~9-12 MB, so it runs out fast.
+  Switch to `cell_06bb_tunnel_cf.sh`; Cloudflare quick tunnels have no such cap
+  and need no account.
+- **The public URL changed after a restart** — expected for a Cloudflare quick
+  tunnel (the hostname is ephemeral). The docs page resolves its own origin at
+  runtime, so it always shows correct examples; just re-share the new URL.
 - **Unexpected `500` under load** — read `serve.log` for a CUDA OOM. Lower
   `QI21_MAX_STEPS` or `QI21_MAX_PIXELS`.
 
