@@ -39,19 +39,27 @@ def call(method, path, payload=None, key=None, timeout=600):
         req.add_header("Authorization", f"Bearer {key}")
     # ngrok's interstitial browser warning otherwise blocks API clients.
     req.add_header("ngrok-skip-browser-warning", "true")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read()
-            try:
-                return r.status, json.loads(body)
-            except Exception:  # noqa: BLE001 — binary (PNG)
-                return r.status, body
-    except urllib.error.HTTPError as e:
-        body = e.read()
+    last_exc = None
+    for attempt in range(4):
         try:
-            return e.code, json.loads(body)
-        except Exception:  # noqa: BLE001
-            return e.code, {"raw": body[:300].decode("utf-8", "replace")}
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read()
+                try:
+                    return r.status, json.loads(body)
+                except Exception:  # noqa: BLE001 — binary (PNG)
+                    return r.status, body
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            try:
+                return e.code, json.loads(body)
+            except Exception:  # noqa: BLE001
+                return e.code, {"raw": body[:300].decode("utf-8", "replace")}
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
+            # tunnel hiccups are transient; the queue never drops the job, so
+            # retry — this is the entire point of the never-fail design
+            last_exc = exc
+            time.sleep(2 + attempt * 2)
+    return 0, {"error": f"connection failed after retries: {last_exc}"}
 
 
 def wait_done(job_id, key, deadline_s=600):
@@ -59,6 +67,9 @@ def wait_done(job_id, key, deadline_s=600):
     t0 = time.time()
     while time.time() - t0 < deadline_s:
         st, d = call("GET", f"/jobs/{job_id}", key=key)
+        if st == 0:
+            time.sleep(2)  # transient tunnel drop — keep polling
+            continue
         if st != 200:
             return "http-" + str(st), d
         if d["status"] in ("done", "error", "canceled"):
