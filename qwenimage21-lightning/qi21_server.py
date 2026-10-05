@@ -158,6 +158,10 @@ DOCS_HTML = r"""<!doctype html>
   }
   .mark { width: 22px; height: 22px; flex: 0 0 auto; }
   .top .name { font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; }
+  @media (max-width: 700px) {
+    .baseurl { display: none; }
+    .top .name { font-size: 13.5px; white-space: nowrap; }
+  }
   .top .ver {
     font: 600 11px var(--mono); color: var(--brand);
     border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
@@ -181,6 +185,8 @@ DOCS_HTML = r"""<!doctype html>
 
   /* ---------- layout ---------- */
   .shell { display: grid; grid-template-columns: 256px minmax(0,1fr); }
+  .shell > * { min-width: 0; }   /* grid items must be allowed to shrink below min-content */
+  main > * { min-width: 0; }
   @media (max-width: 960px) { .shell { grid-template-columns: 1fr; } }
 
   nav.side {
@@ -197,6 +203,22 @@ DOCS_HTML = r"""<!doctype html>
     }
   }
   nav .group { margin-bottom: 22px; }
+  .toc-toggle {
+    display: none;
+    width: 100%;
+    align-items: center; justify-content: space-between;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 12px; font: 600 13px var(--sans); cursor: pointer;
+  }
+  .toc-toggle svg { width: 13px; height: 13px; transition: transform .18s ease-out; }
+  @media (max-width: 960px) {
+    .toc-toggle { display: flex; }
+    nav.side .groups { display: none; }
+    nav.side.open .groups { display: block; }
+    nav.side.open .toc-toggle svg { transform: rotate(180deg); }
+    nav.side { padding-top: 14px; }
+  }
   nav .group h4 {
     margin: 0 0 6px; padding: 0 10px;
     font-size: 11.5px; font-weight: 700; letter-spacing: .08em;
@@ -251,7 +273,10 @@ DOCS_HTML = r"""<!doctype html>
   .ep-desc { color: var(--text-2); font-size: 13.5px; margin: 8px 0 0; }
 
   /* ---------- tables ---------- */
-  table { width: 100%; border-collapse: collapse; margin: 12px 0 6px; font-size: 13.5px; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 12px 0 6px; font-size: 13.5px;
+    display: block; overflow-x: auto;   /* narrow screens scroll the table, not the page */
+  }
   th {
     text-align: left; font-size: 11px; font-weight: 700;
     letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
@@ -344,6 +369,11 @@ DOCS_HTML = r"""<!doctype html>
 
 <div class="shell">
 <nav class="side" aria-label="Sections">
+  <button type="button" class="toc-toggle" aria-expanded="false" aria-controls="toc-groups">
+    Contents
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+  </button>
+  <div class="groups">
   <div class="group">
     <h4>Getting started</h4>
     <a href="#overview">Overview</a>
@@ -370,6 +400,7 @@ DOCS_HTML = r"""<!doctype html>
     <h4>Reference</h4>
     <a href="#limits">Limits &amp; config</a>
     <a href="#performance">Measured performance</a>
+  </div>
   </div>
 </nav>
 
@@ -749,6 +780,23 @@ document.querySelectorAll(".copy").forEach(function (btn) {
       var ta = document.createElement("textarea");
       ta.value = text; document.body.appendChild(ta); ta.select();
       document.execCommand("copy"); ta.remove(); done();
+    }
+  });
+});
+
+// ---- mobile contents toggle ----
+var tocBtn = document.querySelector(".toc-toggle");
+var side = document.querySelector("nav.side");
+tocBtn.addEventListener("click", function () {
+  var open = side.classList.toggle("open");
+  tocBtn.setAttribute("aria-expanded", open ? "true" : "false");
+});
+// navigating from the mobile TOC collapses it again
+links.forEach(function (a) {
+  a.addEventListener("click", function () {
+    if (window.matchMedia("(max-width: 960px)").matches) {
+      side.classList.remove("open");
+      tocBtn.setAttribute("aria-expanded", "false");
     }
   });
 });
