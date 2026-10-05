@@ -50,6 +50,7 @@ import pathlib
 import time
 
 import torch
+from diffusers import FlowMatchEulerDiscreteScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -69,6 +70,11 @@ GPU_LOCK = asyncio.Lock()
 app = FastAPI(title="Qwen-Image-2.1", version="1.0")
 PIPE = None
 BOOT_T = time.time()
+# Fast lane (opt-in): Turbo8 distilled LoRA + its required scheduler. Built at
+# boot; if it fails the server still serves base quality and /health says so.
+FAST_READY = False
+FAST_SCHEDULER = None
+BASE_SCHEDULER = None
 
 # The browser UI, embedded verbatim from the kit's qi21_ui.html (the canonical,
 # readable copy — this string must stay byte-identical to it; cell_06_serve.sh's
@@ -311,6 +317,13 @@ UI_HTML = r"""<!doctype html>
     </div>
 
     <div class="field">
+      <label for="fast" style="display:flex;align-items:center;gap:8px;color:var(--text);font-size:13px;cursor:pointer">
+        <input type="checkbox" id="fast" style="width:auto;accent-color:var(--accent)">
+        Fast mode <span class="hint">(Turbo8 · 8 steps · ~1.5s — dense text degrades)</span>
+      </label>
+    </div>
+
+    <div class="field">
       <label for="key">API key</label>
       <input type="password" id="key" placeholder="qi21-…" autocomplete="off">
       <span class="hint">Stored in this browser only (localStorage).</span>
@@ -360,6 +373,7 @@ var els = {
 };
 
 var busy = false, timer = null, t0 = 0;
+var elsFast = $("fast");
 var gallery = [];   // {url, seed, width, height, steps, seconds}
 var current = -1;
 
@@ -426,15 +440,17 @@ function generate() {
   setStatus("", "");
 
   var steps = parseInt(els.steps.value, 10) || 28;
+  if (elsFast.checked) { steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
   t0 = performance.now();
   timer = setInterval(function () {
     var dt = (performance.now() - t0) / 1000;
     els.elapsed.textContent = dt.toFixed(1) + "s";
-    els.busySub.textContent = "denoising · " + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
+    els.busySub.textContent = (elsFast.checked ? "fast lane · " : "denoising · ") + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
   }, 100);
 
   var body = {
     prompt: prompt,
+    fast: elsFast.checked,
     width: parseInt(els.width.value, 10) || 1024,
     height: parseInt(els.height.value, 10) || 1024,
     steps: steps,
@@ -479,7 +495,7 @@ function generate() {
     current = gallery.length;
     gallery.push({ url: url, seed: d.seed, width: d.width, height: d.height, steps: d.steps, seconds: d.seconds, prompt: prompt });
     els.meta.hidden = false;
-    els.metaInfo.textContent = d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
+    els.metaInfo.textContent = (d.fast ? "FAST · " : "") + d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
     els.download.hidden = false;
     renderHistory();
     setStatus("done in " + d.seconds + " s (" + d.seconds_per_step + " s/step)", "info");
@@ -555,6 +571,10 @@ class GenerateRequest(BaseModel):
     negative_prompt: str = Field(default="",
                                  description="only used when cfg > 1 — the pipeline "
                                              "ignores it at true_cfg_scale=1")
+    fast: bool = Field(default=False,
+                       description="Turbo8 distilled lane: 8 steps, cfg forced 1.0, "
+                                   "~1.5s per 1024px image. Cost: dense text and complex "
+                                   "edits degrade (text exact-match 95% -> 75%).")
 
 
 async def require_token(authorization: str = Header(default="")) -> None:
@@ -584,6 +604,7 @@ async def health():
         "resident_gib": round(torch.cuda.memory_allocated() / 2**30, 1) if torch.cuda.is_available() else None,
         "uptime_s": round(time.time() - BOOT_T, 1),
         "busy": GPU_LOCK.locked(),
+        "fast_ready": FAST_READY,
     }
 
 
@@ -595,6 +616,10 @@ async def generate(req: GenerateRequest):
 
     if req.width * req.height > MAX_PIXELS:
         raise HTTPException(400, f"too many pixels: cap is {MAX_PIXELS}")
+
+    fast = bool(req.fast)
+    if fast and not FAST_READY:
+        raise HTTPException(503, "fast mode unavailable — the Turbo8 LoRA did not load at boot")
 
     seed = req.seed if req.seed >= 0 else int(torch.Generator("cuda").initial_seed())
     gen = torch.Generator("cuda").manual_seed(seed)
@@ -610,14 +635,16 @@ async def generate(req: GenerateRequest):
             headers={"Retry-After": os.environ.get("QI21_QUEUE_S", "5")},
         )
 
+    steps = 8 if fast else req.steps   # Turbo8 is distilled for exactly 8
+    cfg = 1.0 if fast else req.cfg     # distilled cards are guidance-free
     try:
         t0 = time.time()
         kwargs = dict(
             prompt=req.prompt,
             width=req.width,
             height=req.height,
-            num_inference_steps=req.steps,
-            true_cfg_scale=req.cfg,
+            num_inference_steps=steps,
+            true_cfg_scale=cfg,
             generator=gen,
             # Pinned explicitly, not left to the default. The docs warn that
             # toggling this "does not reproduce the same image bit-for-bit in
@@ -633,18 +660,30 @@ async def generate(req: GenerateRequest):
         #  - "negative_prompt ... Ignored when true_cfg_scale is not greater
         #    than 1." Since the default is 1.0, forwarding a negative prompt
         #    at the default is a silent no-op. Only send it when cfg > 1.
-        if req.negative_prompt and req.cfg > 1.0:
+        if req.negative_prompt and cfg > 1.0:
             kwargs["negative_prompt"] = req.negative_prompt
+        if fast:
+            # The stock scheduler config wrecks few-step schedules — Turbo8's
+            # card requires a scheduler with shift_terminal unset. Swap under
+            # the lock, restore after, so base requests are untouched.
+            PIPE.scheduler = FAST_SCHEDULER
         # The blocking CUDA call has to leave the event loop alone, or the
         # health endpoint stops answering while a render is in flight.
         image = await asyncio.to_thread(lambda: PIPE(**kwargs).images[0])
         dt = time.time() - t0
-
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     finally:
+        if fast:
+            PIPE.scheduler = BASE_SCHEDULER
         GPU_LOCK.release()
+
+    # PNG + base64 run OUTSIDE the lock (compress_level=1: this is transport
+    # encoding, not archival). Previously this sat inside the lock, so every
+    # queued request waited for the previous request's PNG encode — up to
+    # 0.1-0.3 s of pure stall per request with the GPU idle (found by the
+    # speed-research pass, 2026-10-06).
+    buf = io.BytesIO()
+    image.save(buf, format="PNG", compress_level=1)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
     # Response shape is the OpenAI /v1/images/generations one — DALL·E-shaped:
     #   {"created": <epoch>, "data": [{"b64_json": ..., "url": null, ...}]}
@@ -663,22 +702,41 @@ async def generate(req: GenerateRequest):
         "seed": seed,
         "width": req.width,
         "height": req.height,
-        "steps": req.steps,
+        "steps": steps,
         "seconds": round(dt, 2),
-        "seconds_per_step": round(dt / req.steps, 3),
+        "seconds_per_step": round(dt / steps, 3),
+        "fast": fast,
     }
 
 
 def load() -> None:
     """Load the pipeline. Called before uvicorn starts so /health is honest."""
-    global PIPE
+    global PIPE, BASE_SCHEDULER, FAST_SCHEDULER, FAST_READY
     from diffusers import QwenImage21Pipeline
 
     print(f"loading {WORK} -> cuda (bfloat16, no offload)", flush=True)
     t0 = time.time()
     PIPE = QwenImage21Pipeline.from_pretrained(str(WORK), torch_dtype=torch.bfloat16).to("cuda")
+    BASE_SCHEDULER = PIPE.scheduler
     gib = torch.cuda.memory_allocated() / 2**30
     print(f"MODEL_READY in {time.time()-t0:.1f}s — {gib:.1f} GiB resident", flush=True)
+
+    # Fast lane: Turbo8 (r128, 8 steps, T2I + editing + RGBA + up to 2K).
+    # Requirements are from its model card and are not negotiable: the LoRA,
+    # and a scheduler with shift_terminal unset. Kept strictly opt-in — base
+    # quality stays the default for every request that does not ask for it.
+    try:
+        PIPE.load_lora_weights(
+            "chriswritescode/Turbo8-LoRA-Qwen-Image-2.1",
+            weight_name="turbo8_lora_step2500.safetensors",
+        )
+        FAST_SCHEDULER = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            str(WORK), subfolder="scheduler", shift_terminal=None
+        )
+        FAST_READY = True
+        print("FAST_READY — Turbo8 loaded; fast=true serves 8-step images", flush=True)
+    except Exception as exc:  # noqa: BLE001 — base serving must survive this
+        print(f"!! Turbo8 fast lane failed ({type(exc).__name__}: {exc}) — base only", flush=True)
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ echo "=== 3/5 diffusers from git (QwenImage21Pipeline is not on PyPI yet) ==="
 UVPIP "git+https://github.com/huggingface/diffusers"
 
 echo "=== 4/5 transformers >= 5.17 (the Qwen3-VL text encoder needs it) ==="
-UVPIP "transformers>=5.17" accelerate safetensors
+UVPIP "transformers>=5.17" accelerate safetensors peft  # peft: LoRA loading (fast lane)
 
 echo "=== 5/5 torchvision + serving deps — BOTH load-bearing, not optional ==="
 # torchvision: the checkpoint ships a Qwen3VL *video* processor class, and

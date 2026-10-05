@@ -235,6 +235,13 @@
     </div>
 
     <div class="field">
+      <label for="fast" style="display:flex;align-items:center;gap:8px;color:var(--text);font-size:13px;cursor:pointer">
+        <input type="checkbox" id="fast" style="width:auto;accent-color:var(--accent)">
+        Fast mode <span class="hint">(Turbo8 · 8 steps · ~1.5s — dense text degrades)</span>
+      </label>
+    </div>
+
+    <div class="field">
       <label for="key">API key</label>
       <input type="password" id="key" placeholder="qi21-…" autocomplete="off">
       <span class="hint">Stored in this browser only (localStorage).</span>
@@ -284,6 +291,7 @@ var els = {
 };
 
 var busy = false, timer = null, t0 = 0;
+var elsFast = $("fast");
 var gallery = [];   // {url, seed, width, height, steps, seconds}
 var current = -1;
 
@@ -350,15 +358,17 @@ function generate() {
   setStatus("", "");
 
   var steps = parseInt(els.steps.value, 10) || 28;
+  if (elsFast.checked) { steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
   t0 = performance.now();
   timer = setInterval(function () {
     var dt = (performance.now() - t0) / 1000;
     els.elapsed.textContent = dt.toFixed(1) + "s";
-    els.busySub.textContent = "denoising · " + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
+    els.busySub.textContent = (elsFast.checked ? "fast lane · " : "denoising · ") + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
   }, 100);
 
   var body = {
     prompt: prompt,
+    fast: elsFast.checked,
     width: parseInt(els.width.value, 10) || 1024,
     height: parseInt(els.height.value, 10) || 1024,
     steps: steps,
@@ -403,7 +413,7 @@ function generate() {
     current = gallery.length;
     gallery.push({ url: url, seed: d.seed, width: d.width, height: d.height, steps: d.steps, seconds: d.seconds, prompt: prompt });
     els.meta.hidden = false;
-    els.metaInfo.textContent = d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
+    els.metaInfo.textContent = (d.fast ? "FAST · " : "") + d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
     els.download.hidden = false;
     renderHistory();
     setStatus("done in " + d.seconds + " s (" + d.seconds_per_step + " s/step)", "info");
