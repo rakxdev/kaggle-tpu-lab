@@ -130,12 +130,20 @@ It measures rather than asserts, so the numbers are your card's numbers:
 
 ## The endpoint
 
-`qi21_server.py` — FastAPI, one model resident in VRAM, single uvicorn worker.
+`qi21_server.py` — FastAPI, N workers (default 3, one model each), a never-fail
+SQLite-WAL job queue, and VRAM-aware claiming. **API-first by design: there is no
+web generator.** `/` serves the full API reference page (`qi21_docs.html`,
+self-contained, zero dependencies) — that page is the community's human interface.
 
 ```
-GET  /health                      no auth (uptime, VRAM, whether busy)
-POST /generate                    bearer token required
-POST /v1/images/generations       alias, so OpenAI-shaped clients can aim here
+GET  /                       API reference page (the docs, no auth)
+GET  /health                 per-worker view (no auth)
+GET  /queue                  global queue counts (no auth)
+POST /generate               submit -> 202 {job_id, queue_position}; never rejects
+GET  /jobs/{id}              status + live queue position + result meta
+GET  /jobs/{id}/result       the PNG (24h retention)
+POST /jobs/{id}/cancel       cancel while queued
+POST /v1/images/generations  OpenAI-shaped sync route (waits <=120s)
 ```
 
 Request: `{prompt, width, height, steps, cfg, seed, negative_prompt}`.

@@ -133,546 +133,675 @@ FAST_READY = False
 BOOT_T = time.time()
 WORKER_ID = f"worker-{os.getpid()}"
 
-# The browser UI, embedded verbatim from the kit's qi21_ui.html (byte-identity
-# is verified by cell_06_serve.sh's build step). Same-origin => no CORS.
-UI_HTML = r"""<!doctype html>
+# The API reference page, embedded verbatim from the kit's qi21_docs.html
+# (byte-identity is verified by cell_06_serve.sh's build step). This is the
+# ONLY human-facing surface: the service is API-first — `/` is the docs, and
+# every other route is JSON.
+DOCS_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Qwen-Image-2.1</title>
+<title>Qwen-Image-2.1 API — Reference</title>
 <style>
   :root {
-    --bg: #0c0d10;
-    --surface: #14161b;
-    --surface-2: #191c23;
-    --border: #262a33;
-    --text: #e8eaf0;
-    --muted: #97a0b0;
-    --accent: #e8a33d;
-    --accent-ink: #171003;
+    --bg: #0b0c0f;
+    --bg-raised: #101218;
+    --surface: #14161c;
+    --border: #232733;
+    --border-soft: #1a1d26;
+    --text: #e7e9ef;
+    --text-2: #a7afc0;
+    --muted: #7c8598;
+    --brand: #e8a33d;
+    --brand-ink: #171003;
+    --get: #3ecf8e;
+    --post: #5b9dff;
     --danger: #e5645f;
-    --ok: #6fbf8b;
-    --radius: 8px;
+    --code-bg: #0d0f14;
+    --radius: 10px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  html { scroll-behavior: smooth; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font: 15px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased;
   }
+  ::selection { background: rgba(232,163,61,.28); }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a2e3a; border-radius: 5px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-track { background: transparent; }
 
-  header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border);
+  /* ---------- top bar ---------- */
+  .top {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 22px; height: 56px;
+    background: rgba(11,12,15,.86);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-soft);
   }
-  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .01em; }
-  header .sub { color: var(--muted); font-size: 12px; }
-  header .spacer { flex: 1; }
-  #health { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-  #health .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
-  #health.ok .dot { background: var(--ok); }
+  .mark { width: 22px; height: 22px; flex: 0 0 auto; }
+  .top .name { font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; }
+  .top .ver {
+    font: 600 11px var(--mono); color: var(--brand);
+    border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
+    border-radius: 999px; padding: 2px 8px;
+  }
+  .top .spacer { flex: 1; }
+  .baseurl {
+    display: flex; align-items: center; gap: 8px;
+    font: 12px var(--mono); color: var(--text-2);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 5px 10px;
+    max-width: 44vw; overflow: hidden;
+  }
+  .baseurl span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .baseurl button {
+    all: unset; cursor: pointer; color: var(--muted);
+    display: inline-flex; padding: 2px;
+  }
+  .baseurl button:hover { color: var(--brand); }
+  .baseurl button svg { width: 13px; height: 13px; }
 
-  main {
-    display: grid;
-    grid-template-columns: 360px 1fr;
-    gap: 0;
-    height: calc(100vh - 49px);
-  }
-  @media (max-width: 860px) {
-    main { grid-template-columns: 1fr; height: auto; }
-    #canvas { min-height: 60vh; }
-  }
+  /* ---------- layout ---------- */
+  .shell { display: grid; grid-template-columns: 256px minmax(0,1fr); }
+  @media (max-width: 960px) { .shell { grid-template-columns: 1fr; } }
 
-  aside {
-    border-right: 1px solid var(--border);
-    padding: 16px;
+  nav.side {
+    position: sticky; top: 56px;
+    height: calc(100vh - 56px);
     overflow-y: auto;
-    display: flex; flex-direction: column; gap: 16px;
+    border-right: 1px solid var(--border-soft);
+    padding: 22px 14px 40px;
   }
-  @media (max-width: 860px) { aside { border-right: 0; border-bottom: 1px solid var(--border); } }
+  @media (max-width: 960px) {
+    nav.side {
+      position: static; height: auto;
+      border-right: 0; border-bottom: 1px solid var(--border-soft);
+    }
+  }
+  nav .group { margin-bottom: 22px; }
+  nav .group h4 {
+    margin: 0 0 6px; padding: 0 10px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  nav a {
+    display: block; padding: 5px 10px; margin: 1px 0;
+    border-radius: 7px; color: var(--text-2); font-size: 13px;
+    border-left: 2px solid transparent;
+  }
+  nav a:hover { color: var(--text); background: var(--surface); text-decoration: none; }
+  nav a.active { color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); border-left-color: var(--brand); }
 
-  .field { display: flex; flex-direction: column; gap: 6px; }
-  .field > label { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
-  .hint { font-size: 11px; color: var(--muted); }
+  main { padding: 44px 48px 90px; max-width: 800px; }
+  @media (max-width: 960px) { main { padding: 32px 22px 70px; } }
 
-  textarea, input[type="number"], input[type="password"], select {
-    width: 100%;
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 8px 10px;
-    font: inherit;
+  /* ---------- typography ---------- */
+  h1 { font-size: 30px; font-weight: 750; letter-spacing: -.025em; margin: 0 0 10px; }
+  .lede { color: var(--text-2); font-size: 16px; margin: 0 0 8px; max-width: 68ch; }
+  h2 {
+    font-size: 21px; font-weight: 700; letter-spacing: -.02em;
+    margin: 54px 0 6px; padding-top: 26px;
+    border-top: 1px solid var(--border-soft);
   }
-  textarea { resize: vertical; min-height: 84px; }
-  textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
+  h2:first-of-type { border-top: 0; }
+  h3 { font-size: 15.5px; font-weight: 650; margin: 26px 0 4px; }
+  p { color: var(--text-2); max-width: 72ch; margin: 8px 0; }
+  p strong, li strong { color: var(--text); font-weight: 600; }
+  code.inl {
+    font: 12.5px var(--mono);
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 5px; padding: 1px 5px; color: #d8bc8a;
   }
-  input[type="range"] { width: 100%; accent-color: var(--accent); }
-  .row { display: flex; gap: 8px; align-items: center; }
-  .row > * { flex: 1; }
-  .row .tight { flex: 0 0 auto; }
+  section { scroll-margin-top: 76px; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: var(--radius);
-    padding: 5px 9px;
-    font-size: 12px;
-    cursor: pointer;
+  /* ---------- endpoint blocks ---------- */
+  .ep {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 18px 20px 20px;
+    margin: 14px 0 8px;
   }
-  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .ep-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .method {
+    font: 700 11px var(--mono); letter-spacing: .06em;
+    border-radius: 6px; padding: 3px 8px;
+  }
+  .method.post { color: var(--post); background: rgba(91,157,255,.13); border: 1px solid rgba(91,157,255,.35); }
+  .method.get  { color: var(--get);  background: rgba(62,207,142,.12); border: 1px solid rgba(62,207,142,.32); }
+  .ep-path { font: 600 14px var(--mono); color: var(--text); }
+  .ep-desc { color: var(--text-2); font-size: 13.5px; margin: 8px 0 0; }
 
-  #generate {
-    background: var(--accent);
-    color: var(--accent-ink);
-    border: 0;
-    border-radius: var(--radius);
-    padding: 11px 16px;
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
+  /* ---------- tables ---------- */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 6px; font-size: 13.5px; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 700;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+    padding: 7px 12px 7px 0; border-bottom: 1px solid var(--border);
   }
-  #generate[disabled] { opacity: .55; cursor: wait; }
-  kbd {
-    background: var(--surface-2); border: 1px solid var(--border);
-    border-radius: 4px; padding: 0 5px; font-size: 11px; font-family: inherit;
-  }
+  td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; color: var(--text-2); }
+  td:first-child { white-space: nowrap; }
+  td code, .req { font: 12px var(--mono); color: #d8bc8a; }
+  .type { color: var(--muted); font: 12px var(--mono); }
+  .default { color: var(--get); font: 12px var(--mono); }
+  .num { font-variant-numeric: tabular-nums; }
 
-  #canvas {
+  /* ---------- code blocks ---------- */
+  .code {
     position: relative;
-    display: flex; align-items: center; justify-content: center;
-    padding: 20px;
-    overflow: auto;
-  }
-  #stage { position: relative; max-width: 100%; }
-  #stage img {
-    display: block;
-    max-width: 100%;
-    max-height: calc(100vh - 200px);
-    border-radius: 12px;
-    border: 1px solid var(--border);
-  }
-  #stage img.busy { visibility: hidden; }
-
-  #shimmer {
-    position: absolute; inset: 0;
-    border-radius: 12px;
-    background: var(--surface);
+    background: var(--code-bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    margin: 12px 0;
     overflow: hidden;
   }
-  #shimmer::after {
-    content: "";
-    position: absolute; inset: 0;
-    background: linear-gradient(100deg, transparent 30%, var(--surface-2) 50%, transparent 70%);
-    animation: sweep 1.4s infinite;
+  .code .lang {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-soft);
+    font: 600 11px var(--mono); letter-spacing: .05em; color: var(--muted);
   }
-  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
-
-  #busybox {
-    position: absolute; inset: 0;
-    display: flex; flex-direction: column; gap: 4px;
-    align-items: center; justify-content: center;
-    text-align: center;
+  .code pre {
+    margin: 0; padding: 13px 16px;
+    overflow-x: auto;
+    font: 12.5px/1.6 var(--mono);
+    color: #cdd3e0;
   }
-  #busybox .t { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  #busybox .s { color: var(--muted); font-size: 12px; }
-  #busybox .q { color: var(--accent); font-size: 15px; font-weight: 700; margin-bottom: 2px; }
-
-  .meta { display: flex; gap: 14px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
-  .meta button {
-    background: none; border: 1px solid var(--border); color: var(--text);
-    border-radius: var(--radius); padding: 4px 10px; font-size: 12px; cursor: pointer;
+  .copy {
+    all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+    color: var(--muted); font: 600 11px var(--sans); padding: 3px 6px; border-radius: 5px;
   }
-  .meta button:hover { border-color: var(--accent); }
+  .copy:hover { color: var(--brand); background: var(--surface); }
+  .copy svg { width: 12px; height: 12px; }
+  .copy.ok { color: var(--get); }
 
-  #empty { color: var(--muted); text-align: center; max-width: 380px; }
-  #empty .big { font-size: 15px; color: var(--text); margin-bottom: 6px; }
-
-  #statusbar { min-height: 20px; font-size: 12px; }
-  #statusbar.error { color: var(--danger); }
-  #statusbar.info  { color: var(--muted); }
-
-  #history {
-    display: flex; gap: 8px; overflow-x: auto;
-    padding: 10px 20px 16px;
+  /* ---------- callouts ---------- */
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px; margin: 14px 0;
+    font-size: 13.5px; color: var(--text-2);
+    max-width: 72ch;
   }
-  #history button {
-    flex: 0 0 auto; padding: 0;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); cursor: pointer; overflow: hidden;
+  .note b { color: var(--text); }
+  .note.brand { border-color: color-mix(in srgb, var(--brand) 35%, var(--border)); }
+
+  .flow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font: 600 12px var(--mono); margin: 12px 0;
   }
-  #history button[aria-current="true"] { border-color: var(--accent); }
-  #history img { display: block; height: 72px; width: auto; }
+  .flow .st { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; }
+  .flow .st.q { color: var(--brand); }
+  .flow .st.r { color: var(--post); }
+  .flow .st.d { color: var(--get); }
+  .flow .st.e { color: var(--danger); }
+  .flow .arr { color: var(--muted); }
+
+  footer {
+    margin-top: 70px; padding-top: 22px;
+    border-top: 1px solid var(--border-soft);
+    color: var(--muted); font-size: 12.5px;
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Qwen-Image-2.1</h1>
-  <span class="sub">full BF16 · queued · never rejects</span>
+<header class="top">
+  <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" stroke="#e8a33d" stroke-width="1.6"/>
+    <circle cx="12" cy="12" r="4.2" stroke="#e8a33d" stroke-width="1.6"/>
+    <circle cx="12" cy="12" r="1.3" fill="#e8a33d"/>
+  </svg>
+  <span class="name">Qwen-Image-2.1 API</span>
+  <span class="ver">v2.0</span>
   <span class="spacer"></span>
-  <span id="health" class=""><span class="dot"></span><span id="health-text">checking…</span></span>
+  <span class="baseurl" id="base">
+    <span>https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev</span>
+    <button type="button" data-copy="https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev" aria-label="Copy base URL">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+    </button>
+  </span>
 </header>
 
+<div class="shell">
+<nav class="side" aria-label="Sections">
+  <div class="group">
+    <h4>Getting started</h4>
+    <a href="#overview">Overview</a>
+    <a href="#quickstart">Quickstart</a>
+    <a href="#auth">Authentication</a>
+  </div>
+  <div class="group">
+    <h4>Endpoints</h4>
+    <a href="#post-generate">POST /generate</a>
+    <a href="#post-openai">POST /v1/images/generations</a>
+    <a href="#get-job">GET /jobs/&#123;id&#125;</a>
+    <a href="#get-result">GET /jobs/&#123;id&#125;/result</a>
+    <a href="#post-cancel">POST /jobs/&#123;id&#125;/cancel</a>
+    <a href="#get-queue">GET /queue</a>
+    <a href="#get-health">GET /health</a>
+  </div>
+  <div class="group">
+    <h4>Behavior</h4>
+    <a href="#queue-behavior">Queue semantics</a>
+    <a href="#fast-lane">Fast lane</a>
+    <a href="#errors">Error codes</a>
+  </div>
+  <div class="group">
+    <h4>Reference</h4>
+    <a href="#limits">Limits &amp; config</a>
+    <a href="#performance">Measured performance</a>
+  </div>
+</nav>
+
 <main>
-  <aside>
-    <div class="field">
-      <label for="prompt">Prompt</label>
-      <textarea id="prompt" autofocus
-        placeholder="A neon shop sign that reads QWEN IMAGE, rainy night, reflections on wet pavement"></textarea>
-      <span class="hint">Ctrl + Enter to generate</span>
-    </div>
 
-    <div class="field">
-      <label for="negative">Negative prompt <span class="hint">(ignored unless CFG &gt; 1)</span></label>
-      <input type="text" id="negative" placeholder="optional">
-    </div>
+<h1>Qwen-Image-2.1 API</h1>
+<p class="lede">Full-precision text-to-image generation. Submit a prompt, hold your place in a
+queue that never rejects a request, and fetch your image when a worker frees up.
+Three GPU workers, one shared queue, zero rejections.</p>
 
-    <div class="field">
-      <label id="size-label">Size</label>
-      <div class="chips" role="group" aria-labelledby="size-label">
-        <button type="button" class="chip" data-w="1024" data-h="1024" aria-pressed="true">1:1 · 1024</button>
-        <button type="button" class="chip" data-w="1216" data-h="832" aria-pressed="false">3:2</button>
-        <button type="button" class="chip" data-w="1344" data-h="768" aria-pressed="false">16:9</button>
-        <button type="button" class="chip" data-w="768" data-h="1344" aria-pressed="false">9:16</button>
-        <button type="button" class="chip" data-w="2048" data-h="2048" aria-pressed="false">2K</button>
-      </div>
-      <div class="row">
-        <div class="field"><label for="width">Width</label><input type="number" id="width" value="1024" min="64" max="2048" step="32"></div>
-        <div class="field"><label for="height">Height</label><input type="number" id="height" value="1024" min="64" max="2048" step="32"></div>
-      </div>
-    </div>
+<!-- ============================================================ overview -->
+<section id="overview">
+<h2>Overview</h2>
+<p>The service runs the complete, unquantized Qwen-Image-2.1 model (33.1 GB BF16)
+on an NVIDIA H200 across three worker processes. Every generation request is
+admitted to a durable FIFO queue — at any traffic level the response is either a
+finished image or a queue position, never a rejection.</p>
+<table>
+<tr><th>Property</th><th>Value</th></tr>
+<tr><td>Model</td><td>Qwen-Image-2.1 — 7B DiT + Qwen3-VL 8B encoder, full BF16</td></tr>
+<tr><td>Resolutions</td><td>64–2048 px per side, multiples of 32 (native 2K supported)</td></tr>
+<tr><td>Queue</td><td class="num">Unbounded FIFO — requests wait, never fail</td></tr>
+<tr><td>Workers</td><td class="num">3 concurrent renders</td></tr>
+<tr><td>Result retention</td><td class="num">24 hours after completion</td></tr>
+<tr><td>License</td><td>Qwen Research — non-commercial research and evaluation</td></tr>
+</table>
+<div class="note"><b>The golden rule of this API:</b> a submit can only fail validation
+(bad key, bad parameters). Capacity is never a failure — when all workers are busy,
+you get a queue position and your turn comes in order.</div>
+</section>
 
-    <div class="field">
-      <label for="steps">Steps: <span id="steps-val">28</span></label>
-      <input type="range" id="steps" min="4" max="50" step="1" value="28">
-      <span class="hint">Quality dial — cost scales linearly. 28 is the balance point.</span>
-    </div>
+<!-- ============================================================ quickstart -->
+<section id="quickstart">
+<h2>Quickstart</h2>
+<p>Three calls: submit, poll, download.</p>
 
-    <div class="field">
-      <label for="cfg">CFG</label>
-      <input type="number" id="cfg" value="1.0" min="1" max="8" step="0.5">
-      <span class="hint">Model default is 1.0 (guidance-free). Above 1 runs the DiT twice per step.</span>
-    </div>
+<div class="code"><div class="lang"><span>1 · submit</span>
+<button type="button" class="copy" data-copy="curl -s -X POST https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/generate -H 'Authorization: Bearer YOUR_KEY' -H 'Content-Type: application/json' -d '{&quot;prompt&quot;:&quot;a lighthouse in fog&quot;,&quot;width&quot;:1024,&quot;height&quot;:1024,&quot;steps&quot;:28,&quot;seed&quot;:7}'">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>curl -s -X POST https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/generate \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"a lighthouse in fog","width":1024,"height":1024,"steps":28,"seed":7}'
 
-    <div class="field">
-      <label for="seed">Seed</label>
-      <div class="row">
-        <input type="number" id="seed" value="-1" step="1">
-        <button type="button" class="chip tight" id="use-last" title="Use the seed of the last image">last</button>
-        <button type="button" class="chip tight" id="randomize" title="Random seed (-1)">rnd</button>
-      </div>
-    </div>
+# → 202
+# {
+#   "job_id": "e7d850545110…",
+#   "status": "queued",
+#   "queue_position": 0,                       ← 0-based; you are #1
+#   "status_url":  "/jobs/e7d850545110…",
+#   "result_url":  "/jobs/e7d850545110…/result",
+#   "cancel_url":  "/jobs/e7d850545110…/cancel"
+# }</pre></div>
 
-    <div class="field">
-      <label for="fast" style="display:flex;align-items:center;gap:8px;color:var(--text);font-size:13px;cursor:pointer">
-        <input type="checkbox" id="fast" style="width:auto;accent-color:var(--accent)">
-        Fast mode <span class="hint">(Turbo8 · 8 steps · ~1.5s — dense text degrades)</span>
-      </label>
-    </div>
+<div class="code"><div class="lang"><span>2 · poll until done</span>
+<button type="button" class="copy" data-copy="curl -s https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/jobs/JOB_ID -H 'Authorization: Bearer YOUR_KEY'">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>curl -s https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/jobs/JOB_ID \
+  -H "Authorization: Bearer YOUR_KEY"
 
-    <div class="field">
-      <label for="key">API key</label>
-      <input type="password" id="key" placeholder="qi21-…" autocomplete="off">
-      <span class="hint">Stored in this browser only (localStorage).</span>
-    </div>
+# while waiting:
+# { "status": "queued",    "queue_position": 1,  … }
+# { "status": "rendering", … }
+# when finished:
+# { "status": "done",
+#   "result": { "seed": 7, "width": 1024, "height": 1024,
+#               "steps": 28, "seconds": 4.3,
+#               "seconds_per_step": 0.154, "fast": false },
+#   "result_url": "/jobs/JOB_ID/result" }</pre></div>
 
-    <button id="generate">Generate</button>
-    <div id="statusbar" role="status" aria-live="polite"></div>
-  </aside>
+<div class="code"><div class="lang"><span>3 · fetch the PNG</span>
+<button type="button" class="copy" data-copy="curl -s https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/jobs/JOB_ID/result -H 'Authorization: Bearer YOUR_KEY' -o image.png">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>curl -s https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/jobs/JOB_ID/result \
+  -H "Authorization: Bearer YOUR_KEY" -o image.png</pre></div>
+</section>
 
-  <section>
-    <div id="canvas">
-      <div id="stage" hidden>
-        <img id="image" alt="Generated image">
-        <div id="shimmer" hidden></div>
-        <div id="busybox" hidden>
-          <div class="q" id="queue-pos" hidden></div>
-          <div class="t" id="elapsed">0.0s</div>
-          <div class="s" id="busy-sub"></div>
-        </div>
-      </div>
-      <div id="empty">
-        <div class="big">Nothing generated yet</div>
-        <div>Write a prompt, pick a size, hit Generate.</div>
-        <div style="margin-top:6px"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> works from the prompt box.</div>
-      </div>
-    </div>
-    <div class="meta" id="meta" hidden>
-      <span id="meta-info"></span>
-      <span class="tight"></span>
-      <button type="button" id="download">Download PNG</button>
-    </div>
-    <div id="history" hidden></div>
-  </section>
+<!-- ============================================================ auth -->
+<section id="auth">
+<h2>Authentication</h2>
+<p>Every endpoint except <code class="inl">/health</code> and <code class="inl">/queue</code>
+requires a bearer token. Send it in the <code class="inl">Authorization</code> header;
+a missing or wrong token returns <b>401</b>.</p>
+<div class="note"><b>Browser clients:</b> requests made from JavaScript must also send
+the <code class="inl">ngrok-skip-browser-warning: true</code> header to bypass the
+tunnel's first-visit interstitial. Server-side clients (curl, SDKs) don't need it.</div>
+</section>
+
+<!-- ============================================================ POST /generate -->
+<section id="post-generate">
+<h2>Submit a generation</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method post">POST</span><span class="ep-path">/generate</span></div>
+  <p class="ep-desc">Adds a job to the queue and returns immediately with its position.
+  The queue is unbounded — this endpoint does not have a capacity-based failure mode.</p>
+</div>
+
+<h3>Request body</h3>
+<table>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>prompt</code></td><td class="type">string</td><td class="default">required</td>
+  <td>What to draw. Minimum length 1.</td></tr>
+<tr><td><code>width</code></td><td class="type">int</td><td class="default">1024</td>
+  <td>64–2048. Must be a multiple of 32 (values are floored).</td></tr>
+<tr><td><code>height</code></td><td class="type">int</td><td class="default">1024</td>
+  <td>Same rules as width. Total pixels are capped at 2048×2048.</td></tr>
+<tr><td><code>steps</code></td><td class="type">int</td><td class="default">20</td>
+  <td>1–50. Cost scales linearly; more steps refine detail. 28 is a good balance.</td></tr>
+<tr><td><code>cfg</code></td><td class="type">float</td><td class="default">1.0</td>
+  <td>Guidance scale. The model is guidance-free at 1.0 — that is the intended
+  full-quality setting. Above 1.0 the model runs twice per step (2× cost).</td></tr>
+<tr><td><code>seed</code></td><td class="type">int</td><td class="default">-1</td>
+  <td>-1 picks a random seed, which is returned in the job status. Same seed +
+  same parameters = same image.</td></tr>
+<tr><td><code>negative_prompt</code></td><td class="type">string</td><td class="default">""</td>
+  <td>Only used when <code>cfg</code> &gt; 1 — the pipeline ignores it at the default
+  setting, so the server drops it rather than pretending it was applied.</td></tr>
+<tr><td><code>fast</code></td><td class="type">bool</td><td class="default">false</td>
+  <td>Opt-in distilled lane: forces 8 steps and cfg 1.0, roughly 4× faster.
+  Trade-off: dense text and complex compositions degrade. See
+  <a href="#fast-lane">Fast lane</a>.</td></tr>
+</table>
+
+<h3>Response — 202 Accepted</h3>
+<div class="code"><div class="lang"><span>application/json</span>
+<button type="button" class="copy" data-copy='{"job_id":"e7d850545110","status":"queued","queue_position":0,"status_url":"/jobs/e7d850545110","result_url":"/jobs/e7d850545110/result","cancel_url":"/jobs/e7d850545110/cancel"}'>
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>{
+  "job_id": "e7d850545110…",
+  "status": "queued",
+  "queue_position": 0,
+  "status_url": "/jobs/e7d850545110…",
+  "result_url": "/jobs/e7d850545110…/result",
+  "cancel_url": "/jobs/e7d850545110…/cancel"
+}</pre></div>
+<p><code class="inl">queue_position</code> is a snapshot at submit time (0-based —
+position 0 means you are next). Re-poll <code class="inl">status_url</code> for the
+live value.</p>
+</section>
+
+<!-- ============================================================ OpenAI route -->
+<section id="post-openai">
+<h2>OpenAI-compatible endpoint</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method post">POST</span><span class="ep-path">/v1/images/generations</span></div>
+  <p class="ep-desc">Same parameters as <code class="inl">/generate</code>, but the call
+  stays open for up to 120 seconds and answers with the OpenAI images shape — so the
+  official OpenAI SDK works unmodified. If the queue is deeper than the wait, it
+  returns the same 202 envelope as <code class="inl">/generate</code> and you fall back
+  to polling.</p>
+</div>
+<div class="code"><div class="lang"><span>python — official SDK</span>
+<button type="button" class="copy" data-copy='from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/v1",
+    api_key="YOUR_KEY",
+)
+img = client.images.generate(model="qwen-image-2.1", prompt="a lighthouse in fog")
+import base64
+open("out.png", "wb").write(base64.b64decode(img.data[0].b64_json))'>
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://pseudoasymmetric-unbodied-sabine.ngrok-free.dev/v1",
+    api_key="YOUR_KEY",
+)
+img = client.images.generate(model="qwen-image-2.1", prompt="a lighthouse in fog")
+open("out.png", "wb").write(base64.b64decode(img.data[0].b64_json))</pre></div>
+<div class="note">Extras beyond the OpenAI schema arrive as top-level keys:
+<code class="inl">seed</code>, <code class="inl">seconds</code>,
+<code class="inl">seconds_per_step</code>, <code class="inl">fast</code>,
+<code class="inl">job_id</code>. OpenAI clients ignore them; you can use them.</div>
+</section>
+
+<!-- ============================================================ jobs status -->
+<section id="get-job">
+<h2>Job status</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method get">GET</span><span class="ep-path">/jobs/{job_id}</span></div>
+  <p class="ep-desc">Live state of one job. Poll this while waiting.</p>
+</div>
+<h3>Lifecycle</h3>
+<div class="flow">
+  <span class="st q">queued</span><span class="arr">→</span>
+  <span class="st r">rendering</span><span class="arr">→</span>
+  <span class="st d">done</span>
+</div>
+<div class="flow">
+  <span class="st q">queued</span><span class="arr">→</span>
+  <span class="st e">canceled</span>
+  <span style="color:var(--muted);font-weight:400">(cancel only works in this state)</span>
+</div>
+<h3>Response fields</h3>
+<table>
+<tr><th>Field</th><th>Present</th><th>Description</th></tr>
+<tr><td><code>status</code></td><td class="type">always</td><td><code>queued</code> · <code>rendering</code> · <code>done</code> · <code>error</code> · <code>canceled</code></td></tr>
+<tr><td><code>queue_position</code></td><td class="type">while queued</td><td class="num">0-based jobs ahead of you, recomputed on every poll</td></tr>
+<tr><td><code>result</code></td><td class="type">when done</td><td><code>{seed, width, height, steps, seconds, seconds_per_step, fast}</code></td></tr>
+<tr><td><code>result_url</code></td><td class="type">when done</td><td>Where to fetch the PNG</td></tr>
+<tr><td><code>error</code></td><td class="type">when error</td><td>What went wrong (e.g. OOM after retries)</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ result -->
+<section id="get-result">
+<h2>Fetch the image</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method get">GET</span><span class="ep-path">/jobs/{job_id}/result</span></div>
+  <p class="ep-desc">Returns the finished image as <b>PNG bytes</b>. Available for 24
+  hours after completion. <b>409</b> if the job hasn't finished, <b>410</b> if the
+  result expired, <b>404</b> for an unknown id.</p>
+</div>
+</section>
+
+<!-- ============================================================ cancel -->
+<section id="post-cancel">
+<h2>Cancel a job</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method post">POST</span><span class="ep-path">/jobs/{job_id}/cancel</span></div>
+  <p class="ep-desc">Removes a job while it is still waiting. Returns <b>200</b> on
+  success, <b>409</b> if rendering already started. A canceled slot frees up for the
+  next job in line.</p>
+</div>
+</section>
+
+<!-- ============================================================ queue + health -->
+<section id="get-queue">
+<h2>Queue lobby</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method get">GET</span><span class="ep-path">/queue</span></div>
+  <p class="ep-desc">Global counts, no authentication. Handy for a status badge.</p>
+</div>
+<div class="code"><div class="lang"><span>response</span>
+<button type="button" class="copy" data-copy='{"model":"Qwen-Image-2.1","queued":2,"rendering":3}'>
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>{ "model": "Qwen-Image-2.1", "queued": 2, "rendering": 3 }</pre></div>
+</section>
+
+<section id="get-health">
+<h2>Health</h2>
+<div class="ep">
+  <div class="ep-head"><span class="method get">GET</span><span class="ep-path">/health</span></div>
+  <p class="ep-desc">Per-worker view: this process's identity, VRAM residency, queue
+  depth, and whether the fast lane is loaded. No authentication.</p>
+</div>
+<div class="code"><div class="lang"><span>response</span>
+<button type="button" class="copy" data-copy='{"status":"ok","model":"Qwen-Image-2.1","dtype":"bfloat16","workers":3,"worker_id":"worker-84543","resident_gib":30.9,"uptime_s":459.9,"busy":false,"fast_ready":true,"queued":0,"rendering":0}'>
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>copy</button></div>
+<pre>{
+  "status": "ok", "model": "Qwen-Image-2.1", "dtype": "bfloat16",
+  "workers": 3, "worker_id": "worker-84543",
+  "resident_gib": 30.9, "uptime_s": 459.9,
+  "busy": false, "fast_ready": true,
+  "queued": 0, "rendering": 0
+}</pre></div>
+</section>
+
+<!-- ============================================================ queue behavior -->
+<section id="queue-behavior">
+<h2>Queue semantics</h2>
+<p>The queue is the contract. These properties are enforced by design and have been
+verified under load:</p>
+<table>
+<tr><th>Property</th><th>Behavior</th></tr>
+<tr><td>Never rejects</td><td>No capacity-based errors exist. An unbounded number of jobs can wait; each is ~300 bytes of state.</td></tr>
+<tr><td>Strict FIFO</td><td>The oldest queued job takes the first free worker. Positions are recomputed on every poll — always fresh, never drift.</td></tr>
+<tr><td>VRAM-aware</td><td>A job only starts when the card genuinely has room for its size. Large renders (2K) wait for a calm card instead of failing; small renders behind them keep flowing.</td></tr>
+<tr><td>Crash-proof</td><td>Jobs live in a durable store. A worker that dies mid-render has its job requeued automatically (up to 6 attempts). Pending jobs survive server and Studio restarts.</td></tr>
+<tr><td>Disconnect-proof</td><td>Closing your connection changes nothing. Poll again later with the same job id — the result waits up to 24 hours.</td></tr>
+<tr><td>Serializable big renders</td><td>At full settings, 2K renders run one at a time by design; smaller renders can slot into the remaining memory alongside them.</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ fast lane -->
+<section id="fast-lane">
+<h2>Fast lane</h2>
+<p>Setting <code class="inl">"fast": true</code> routes your request to a distilled
+Turbo8 adapter: 8 steps instead of 20–50, roughly <b>4× faster</b> (~1.5 s per
+1024² image). The server forces 8 steps and cfg 1.0 on this lane and ignores
+contradicting parameters.</p>
+<p>The trade-off is real and measured: overall prompt adherence holds, but
+<b>dense or small text inside the image degrades</b> (character accuracy drops from
+~99% to ~95%, exact text match from 95% to 75%). Use fast mode for exploration and
+drafts; use the base lane for final renders and anything with legible lettering.</p>
+</section>
+
+<!-- ============================================================ errors -->
+<section id="errors">
+<h2>Error codes</h2>
+<table>
+<tr><th>Code</th><th>Meaning</th><th>What to do</th></tr>
+<tr><td class="num">400</td><td>Invalid parameters (e.g. pixel cap exceeded)</td><td>Fix the request</td></tr>
+<tr><td class="num">401</td><td>Missing or wrong bearer token</td><td>Set the <code class="inl">Authorization</code> header</td></tr>
+<tr><td class="num">404</td><td>Unknown job id</td><td>Check the id</td></tr>
+<tr><td class="num">409</td><td>Job not finished (result fetch) or already rendering (cancel)</td><td>Poll until done; cancel only while queued</td></tr>
+<tr><td class="num">410</td><td>Result expired (24 h)</td><td>Generate again</td></tr>
+<tr><td class="num">422</td><td>Parameter failed validation</td><td>The response names the field</td></tr>
+<tr><td class="num">500</td><td>Render failed server-side (rare; e.g. repeated OOM)</td><td>Retry once, then report</td></tr>
+<tr><td class="num">503</td><td><code class="inl">fast</code> requested but the fast lane isn't loaded</td><td>Drop <code class="inl">fast</code> or wait for the operator</td></tr>
+</table>
+<p>A transport drop (timeout, connection reset) is never a verdict — the job stays in
+the queue. Poll again with the same id.</p>
+</section>
+
+<!-- ============================================================ limits -->
+<section id="limits">
+<h2>Limits &amp; configuration</h2>
+<h3>Per-request limits</h3>
+<table>
+<tr><th>Limit</th><th>Value</th><th>Notes</th></tr>
+<tr><td>Resolution</td><td class="num">64–2048 px per side, ≤ 2048×2048 total-capped</td><td>Model native is 2K; multiples of 32</td></tr>
+<tr><td>Steps</td><td class="num">1–50</td><td>Linear cost; fast lane pins 8</td></tr>
+<tr><td>Result retention</td><td class="num">24 h</td><td>PNGs are deleted after this</td></tr>
+<tr><td>Sync wait (OpenAI route)</td><td class="num">120 s</td><td>Then returns the 202 envelope</td></tr>
+<tr><td>Concurrent renders</td><td class="num">3</td><td>More requests queue with positions</td></tr>
+</table>
+<h3>Operator environment variables</h3>
+<table>
+<tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+<tr><td><code>QI21_API_KEY</code></td><td class="default">required</td><td>Bearer token for all authenticated routes</td></tr>
+<tr><td><code>QI21_PORT</code></td><td class="default">8080</td><td>Listen port</td></tr>
+<tr><td><code>QI21_WORKERS</code></td><td class="default">3</td><td>Replicas — 3 is the proven maximum for full-weight 2K</td></tr>
+<tr><td><code>QI21_MAX_STEPS</code></td><td class="default">50</td><td>Server-side steps ceiling</td></tr>
+<tr><td><code>QI21_MAX_PIXELS</code></td><td class="default">4194304</td><td>Pixel cap (2048×2048)</td></tr>
+<tr><td><code>QI21_SYNC_WAIT_S</code></td><td class="default">120</td><td>OpenAI-route wait budget</td></tr>
+<tr><td><code>QI21_RENDER_LEASE_S</code></td><td class="default">900</td><td>Crash-lease before a rendering job is requeued</td></tr>
+<tr><td><code>QI21_RESULT_TTL_S</code></td><td class="default">86400</td><td>Result retention</td></tr>
+</table>
+</section>
+
+<!-- ============================================================ performance -->
+<section id="performance">
+<h2>Measured performance</h2>
+<p>Real numbers from this deployment (H200, full BF16, warm). Per-image cost at
+$3.82/h is about <b>$0.006 at 1024²/40 steps</b>.</p>
+<table>
+<tr><th>Setting</th><th>Render time</th><th>Rate</th></tr>
+<tr><td class="num">512² · 20 steps</td><td class="num">~0.9 s</td><td class="num">0.05 s/step</td></tr>
+<tr><td class="num">1024² · 20 steps</td><td class="num">3.0 s</td><td class="num">0.15 s/step</td></tr>
+<tr><td class="num">1024² · 40 steps</td><td class="num">5.9 s</td><td class="num">0.15 s/step</td></tr>
+<tr><td class="num">2048² · 20 steps</td><td class="num">15.8 s</td><td class="num">0.79 s/step</td></tr>
+<tr><td class="num">2048² · 50 steps (max)</td><td class="num">~42 s</td><td class="num">0.85 s/step</td></tr>
+<tr><td class="num">1024² · 8 steps (fast lane)</td><td class="num">~1.5 s</td><td class="num">0.19 s/step</td></tr>
+</table>
+<p>Under burst the workers share the GPU, so concurrent renders each run slower
+while total throughput rises — a measured 5-way burst of 512²/20 sustained
+<b>51 images/min</b> with every request served.</p>
+</section>
+
+<footer>
+Qwen-Image-2.1 weights are provided under the Qwen Research License
+(non-commercial research and evaluation). This service is operated for
+non-commercial community testing. Base image: full BF16, unquantized,
+three replicas on one NVIDIA H200.
+</footer>
+
 </main>
+</div>
 
 <script>
 "use strict";
-var $ = function (id) { return document.getElementById(id); };
-var els = {
-  prompt: $("prompt"), negative: $("negative"), width: $("width"), height: $("height"),
-  steps: $("steps"), stepsVal: $("steps-val"), cfg: $("cfg"), seed: $("seed"),
-  key: $("key"), fast: $("fast"), generate: $("generate"), statusbar: $("statusbar"),
-  stage: $("stage"), image: $("image"), shimmer: $("shimmer"), busybox: $("busybox"),
-  elapsed: $("elapsed"), busySub: $("busy-sub"), queuePos: $("queue-pos"), empty: $("empty"),
-  meta: $("meta"), metaInfo: $("meta-info"), download: $("download"),
-  history: $("history"), health: $("health"), healthText: $("health-text"),
-  useLast: $("use-last"), randomize: $("randomize"),
-};
-
-var busy = false, timer = null, t0 = 0, pollTimer = null;
-var gallery = [];   // {url, seed, width, height, steps, seconds, fast}
-var current = -1;
-
-// ---- api key: persisted locally, never sent anywhere but this origin ----
-els.key.value = localStorage.getItem("qi21_key") || "";
-els.key.addEventListener("change", function () {
-  localStorage.setItem("qi21_key", els.key.value.trim());
-});
-function authHeaders(extra) {
-  var h = extra || {};
-  h["Authorization"] = "Bearer " + els.key.value.trim();
-  h["ngrok-skip-browser-warning"] = "true";
-  return h;
-}
-
-// ---- health ping ----
-function ping() {
-  fetch("/health").then(function (r) { return r.json(); }).then(function (d) {
-    els.health.className = d.status === "ok" ? "ok" : "";
-    var q = (typeof d.queued === "number" && d.queued >= 0) ? " · queue " + d.queued : "";
-    els.healthText.textContent = d.status === "ok"
-      ? "live · " + d.resident_gib + " GiB · " + d.workers + " workers" + q
-      : "loading";
-  }).catch(function () {
-    els.health.className = "";
-    els.healthText.textContent = "unreachable";
-  });
-}
-ping(); setInterval(ping, 20000);
-
-// ---- size chips ----
-document.querySelectorAll(".chip[data-w]").forEach(function (chip) {
-  chip.addEventListener("click", function () {
-    document.querySelectorAll(".chip[data-w]").forEach(function (c) { c.setAttribute("aria-pressed", "false"); });
-    chip.setAttribute("aria-pressed", "true");
-    els.width.value = chip.dataset.w;
-    els.height.value = chip.dataset.h;
-  });
-});
-els.width.addEventListener("input", function () {
-  document.querySelectorAll(".chip[data-w]").forEach(function (c) { c.setAttribute("aria-pressed", "false"); });
-});
-els.steps.addEventListener("input", function () { els.stepsVal.textContent = els.steps.value; });
-
-els.useLast.addEventListener("click", function () {
-  if (gallery.length) els.seed.value = gallery[gallery.length - 1].seed;
-});
-els.randomize.addEventListener("click", function () { els.seed.value = -1; });
-
-function setStatus(msg, cls) {
-  els.statusbar.textContent = msg || "";
-  els.statusbar.className = cls || "";
-}
-
-function stopBusy() {
-  busy = false;
-  if (timer) { clearInterval(timer); timer = null; }
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-  els.generate.disabled = false;
-  els.generate.textContent = "Generate";
-  els.shimmer.hidden = true;
-  els.busybox.hidden = true;
-  els.image.classList.remove("busy");
-}
-
-// ---- submit + poll (never-fail queue: 202 -> job id -> status) ----
-function generate() {
-  if (busy) return;
-  var prompt = els.prompt.value.trim();
-  var key = els.key.value.trim();
-  if (!prompt) { setStatus("Write a prompt first.", "error"); els.prompt.focus(); return; }
-  if (!key) { setStatus("Paste the API key (it is in the cell 6 banner).", "error"); els.key.focus(); return; }
-
-  busy = true;
-  els.generate.disabled = true;
-  els.generate.textContent = "Queued…";
-  els.empty.hidden = true;
-  els.image.classList.add("busy");
-  els.shimmer.hidden = false;
-  els.busybox.hidden = false;
-  els.stage.hidden = false;
-  els.queuePos.hidden = false;
-  els.queuePos.textContent = "submitting…";
-  els.busySub.textContent = "";
-  setStatus("", "");
-  t0 = performance.now();
-  timer = setInterval(function () {
-    els.elapsed.textContent = ((performance.now() - t0) / 1000).toFixed(1) + "s";
-  }, 100);
-
-  var body = {
-    prompt: prompt,
-    width: parseInt(els.width.value, 10) || 1024,
-    height: parseInt(els.height.value, 10) || 1024,
-    steps: parseInt(els.steps.value, 10) || 28,
-    cfg: parseFloat(els.cfg.value) || 1.0,
-    seed: parseInt(els.seed.value, 10),
-    fast: els.fast.checked,
-  };
-  if (body.fast) { body.steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
-  if (els.negative.value.trim() && body.cfg > 1) body.negative_prompt = els.negative.value.trim();
-
-  fetch("/generate", {
-    method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify(body)
-  }).then(function (r) {
-    return r.json().then(function (d) { return { status: r.status, data: d }; });
-  }).then(function (res) {
-    if (res.status === 401) {
-      stopBusy();
-      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
-      setStatus("bad API key — paste the one from the cell 6 banner.", "error");
-      return;
+// ---- copy buttons ----
+document.querySelectorAll(".copy").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var text = btn.getAttribute("data-copy") || "";
+    var done = function () {
+      var prev = btn.innerHTML;
+      btn.classList.add("ok");
+      btn.textContent = "copied";
+      setTimeout(function () { btn.classList.remove("ok"); btn.innerHTML = prev; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); ta.remove(); done();
     }
-    if (res.status !== 202) {
-      stopBusy();
-      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
-      setStatus((res.data && (res.data.error || res.data.detail)) || ("HTTP " + res.status), "error");
-      return;
-    }
-    setStatus("accepted — you are in the queue", "info");
-    poll(res.data.job_id, 600);
-  }).catch(function (err) {
-    stopBusy();
-    if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
-    setStatus("request failed: " + err.message, "error");
   });
-}
-
-function poll(jobId, waitMs) {
-  pollTimer = setTimeout(function () {
-    fetch("/jobs/" + jobId, { headers: authHeaders() })
-      .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
-      .then(function (res) {
-        if (res.status !== 200) {
-          if (res.status === 404) setStatus("job expired — generate again.", "error");
-          else setStatus("status check failed: HTTP " + res.status, "error");
-          stopBusy();
-          return;
-        }
-        var d = res.data;
-        if (d.status === "queued") {
-          var n = (typeof d.queue_position === "number") ? d.queue_position + 1 : "?";
-          els.queuePos.hidden = false;
-          els.queuePos.textContent = "you are #" + n + " in queue";
-          els.busySub.textContent = "your slot is reserved — queued jobs are never dropped";
-          els.generate.textContent = "Queued…";
-          poll(jobId, n <= 3 ? 800 : 2000);
-          return;
-        }
-        if (d.status === "rendering") {
-          els.queuePos.hidden = true;
-          els.busySub.textContent = "rendering on a free worker…";
-          els.generate.textContent = "Rendering…";
-          poll(jobId, 900);
-          return;
-        }
-        if (d.status === "done") {
-          finishDone(d);
-          return;
-        }
-        // error | canceled
-        stopBusy();
-        if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
-        setStatus(d.error || ("job " + d.status), "error");
-      })
-      .catch(function (err) {
-        // transient network hiccup — the queue never drops the job, so retry
-        setStatus("connection hiccup — still polling (" + err.message + ")", "info");
-        poll(jobId, 2000);
-      });
-  }, waitMs);
-}
-
-function finishDone(d) {
-  stopBusy();
-  var m = d.result || {};
-  fetch(d.result_url, { headers: authHeaders() })
-    .then(function (r) {
-      if (!r.ok) throw new Error("result fetch HTTP " + r.status);
-      return r.blob();
-    })
-    .then(function (blob) {
-      var url = URL.createObjectURL(blob);
-      els.image.src = url;
-      els.stage.hidden = false;
-      current = gallery.length;
-      gallery.push({ url: url, seed: m.seed, width: m.width, height: m.height,
-                     steps: m.steps, seconds: m.seconds, fast: m.fast,
-                     prompt: els.prompt.value.trim() });
-      els.meta.hidden = false;
-      els.metaInfo.textContent = (m.fast ? "FAST · " : "") + m.width + "×" + m.height +
-        " · " + m.steps + " steps · " + m.seconds + " s · seed " + m.seed;
-      els.download.hidden = false;
-      renderHistory();
-      setStatus("done in " + m.seconds + " s (" + m.seconds_per_step + " s/step)", "info");
-    })
-    .catch(function (err) {
-      setStatus("render finished but the image could not be fetched: " + err.message, "error");
-      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
-    });
-}
-
-els.generate.addEventListener("click", generate);
-els.prompt.addEventListener("keydown", function (e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") generate();
 });
 
-// ---- download + history ----
-els.download.addEventListener("click", function () {
-  if (current < 0) return;
-  var g = gallery[current];
-  var a = document.createElement("a");
-  a.href = g.url;
-  a.download = "qwen21_" + g.seed + "_" + g.width + "x" + g.height + ".png";
-  a.click();
-});
+// ---- scroll-spy for the sidebar ----
+var links = Array.prototype.slice.call(document.querySelectorAll("nav.side a"));
+var sections = links.map(function (a) {
+  return document.getElementById(a.getAttribute("href").slice(1));
+}).filter(Boolean);
 
-function renderHistory() {
-  if (gallery.length < 1) { els.history.hidden = true; return; }
-  els.history.hidden = false;
-  els.history.innerHTML = "";
-  gallery.forEach(function (g, i) {
-    var b = document.createElement("button");
-    b.type = "button";
-    b.setAttribute("aria-label", "image " + (i + 1) + ", seed " + g.seed);
-    b.setAttribute("aria-current", i === current ? "true" : "false");
-    var img = document.createElement("img");
-    img.src = g.url; img.alt = "";
-    b.appendChild(img);
-    b.addEventListener("click", function () {
-      current = i;
-      els.image.src = g.url;
-      els.stage.hidden = false; els.empty.hidden = true;
-      els.meta.hidden = false;
-      els.metaInfo.textContent = (g.fast ? "FAST · " : "") + g.width + "×" + g.height +
-        " · " + g.steps + " steps · " + g.seconds + " s · seed " + g.seed;
-      renderHistory();
-    });
-    els.history.appendChild(b);
+function spy() {
+  var fromTop = window.scrollY + 90;
+  var active = sections[0];
+  sections.forEach(function (s) { if (s.offsetTop <= fromTop) active = s; });
+  links.forEach(function (a) {
+    a.classList.toggle("active", a.getAttribute("href") === "#" + active.id);
   });
 }
+window.addEventListener("scroll", spy, { passive: true });
+spy();
 </script>
 </body>
 </html>"""
@@ -868,10 +997,11 @@ async def require_token(authorization: str = Header(default="")) -> None:
 
 
 # ---------------------------------------------------------------- routes
-@app.get("/ui")
 @app.get("/")
-async def ui():
-    return HTMLResponse(UI_HTML)
+async def docs():
+    """The API reference. The service has no web generator by design — this
+    page IS the human interface; everything else is JSON."""
+    return HTMLResponse(DOCS_HTML)
 
 
 @app.get("/health")
