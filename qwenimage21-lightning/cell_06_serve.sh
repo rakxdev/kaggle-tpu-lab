@@ -112,6 +112,12 @@ RESULT_TTL_S = float(os.environ.get("QI21_RESULT_TTL_S", "86400"))
 MAX_REQUEUES = 6
 
 RESULTS = WORK / "results"
+# Measured transient VRAM above resident, GiB per megapixel of output
+# (1024²: +6.6, 2048²: +26.3 — from cell 5's bench). Used by the dispatcher to
+# claim a job only when the card actually has room for it, so big renders WAIT
+# for calm VRAM instead of OOM-churning through retries.
+TRANSIENT_GIB_PER_MP = 6.6
+VRAM_SAFETY_GIB = 2.0
 DB_PATH = WORK / "jobs.db"
 
 # THE lock: pipelines are not thread-safe (scheduler state mutates per call).
@@ -719,24 +725,38 @@ def submit_job(params: dict) -> tuple:
     return job_id, pos  # pos = number of jobs ahead of this one (0-based)
 
 
-def claim_next(worker: str):
-    """Atomically claim the oldest queued job. BEGIN IMMEDIATE serializes the
-    claim across processes, so two dispatchers can never take the same row;
-    ORDER BY seq is the FIFO fairness rule."""
+def _need_gib(params: dict) -> float:
+    pixels = (params["width"] / 32) * (params["height"] / 32)  # pipeline floors to /32
+    mp = (pixels * 1024) / 1e6
+    return TRANSIENT_GIB_PER_MP * mp + VRAM_SAFETY_GIB
+
+
+def claim_next(worker: str, free_gib: float):
+    """VRAM-aware first-fit claim: walk queued jobs in FIFO order and take the
+    first whose estimated transient fits the currently-free VRAM. Serialized
+    by BEGIN IMMEDIATE across processes. Effect: big renders (2K) WAIT for calm
+    VRAM instead of OOM-churning; small jobs behind them still flow (no
+    head-of-line blocking beyond actual memory need)."""
     with db() as c:
         c.execute("BEGIN IMMEDIATE")
-        row = c.execute(
-            "SELECT seq,job_id,params FROM jobs WHERE state='queued' ORDER BY seq LIMIT 1"
-        ).fetchone()
-        if row is None:
+        rows = c.execute(
+            "SELECT seq,job_id,params FROM jobs WHERE state='queued' ORDER BY seq"
+        ).fetchall()
+        picked = None
+        for row in rows:
+            params = json.loads(row["params"])
+            if _need_gib(params) <= free_gib:
+                picked = row
+                break
+        if picked is None:
             c.execute("COMMIT")
             return None
         c.execute(
             "UPDATE jobs SET state='rendering',worker=?,started_at=? WHERE job_id=?",
-            (worker, time.time(), row["job_id"]),
+            (worker, time.time(), picked["job_id"]),
         )
         c.execute("COMMIT")
-    return dict(row)
+    return dict(picked)
 
 
 def finish_job(job_id: str, result_path: str, meta: dict) -> None:
@@ -1050,7 +1070,9 @@ async def dispatcher():
     print(f"dispatcher {me} up — claiming jobs", flush=True)
     while True:
         try:
-            row = claim_next(me)
+            torch.cuda.empty_cache()   # release our dead blocks so big jobs can claim
+            free_gib = torch.cuda.mem_get_info()[0] / 2**30
+            row = claim_next(me, free_gib)
             if row is None:
                 if i % 400 == 0:
                     sweep()  # ~every 100s of idle time
