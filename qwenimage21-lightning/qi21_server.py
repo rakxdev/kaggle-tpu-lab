@@ -76,7 +76,7 @@ MAX_PIXELS = int(os.environ.get("QI21_MAX_PIXELS", str(2048 * 2048)))
 SYNC_WAIT_S = float(os.environ.get("QI21_SYNC_WAIT_S", "120"))
 RENDER_LEASE_S = float(os.environ.get("QI21_RENDER_LEASE_S", "900"))
 RESULT_TTL_S = float(os.environ.get("QI21_RESULT_TTL_S", "86400"))
-MAX_REQUEUES = 3
+MAX_REQUEUES = 6
 
 RESULTS = WORK / "results"
 DB_PATH = WORK / "jobs.db"
@@ -1031,6 +1031,31 @@ async def dispatcher():
                     path, meta = await asyncio.to_thread(_render_sync, params, row["job_id"])
                 finish_job(row["job_id"], str(path), meta)
                 print(f"[{me}] done {row['job_id']} in {meta['seconds']}s", flush=True)
+        except torch.cuda.OutOfMemoryError as exc:
+            # VRAM contention between replicas: shrink this worker's cached
+            # blocks, put the job back in the queue, and retry when the other
+            # workers release their transients. The job is never lost — the
+            # queue holds it and a later attempt succeeds once memory frees.
+            torch.cuda.empty_cache()
+            rq = 0
+            if row is not None:
+                with db() as c:
+                    r = c.execute(
+                        "SELECT requeues FROM jobs WHERE job_id=?", (row["job_id"],)
+                    ).fetchone()
+                    rq = ((r["requeues"] if r else 0) or 0) + 1
+                    if rq >= MAX_REQUEUES:
+                        fail_job(row["job_id"], f"repeated CUDA OOM: {exc}")
+                    else:
+                        c.execute(
+                            "UPDATE jobs SET state='queued',worker=NULL,started_at=NULL,"
+                            "requeues=? WHERE job_id=?",
+                            (rq, row["job_id"]),
+                        )
+                print(f"[{me}] OOM on {row['job_id']} — requeued (attempt {rq}/{MAX_REQUEUES})",
+                      flush=True)
+            row = None
+            await asyncio.sleep(3)
         except Exception as exc:  # noqa: BLE001 — a failed job must not kill dispatch
             try:
                 if row is not None:
