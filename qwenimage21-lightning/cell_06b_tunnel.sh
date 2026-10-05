@@ -1,25 +1,31 @@
 #!/bin/sh
-# CELL 6b — expose the server publicly with an ngrok tunnel.
+# CELL 6b — expose the server publicly through ngrok, on the RESERVED domain.
 #
 # *** THIS CELL MAKES IT PUBLIC. Anyone who learns the API key can spend your
-# *** credit through this URL. Only run it after cell 5 told you the speed is
-# *** worth it, and prefer a reserved/paid ngrok domain over a random
-# *** trycloudflare URL if you keep this up for more than a session.
+# *** credit through this URL. Only run it after cell 5's numbers convinced
+# *** you, and remember the model license: Qwen Research — non-commercial.
 #
-# Cost: the tunnel itself is free, but it keeps the server process (and its
-# $3.26/h GPU) alive for as long as it runs. The cell 6 watchdog still applies.
+# The authtoken is read from /tmp/ngrok_token (or $NGROK_TOKEN). It is NEVER
+# hardcoded here and NEVER committed — this file lives on GitHub.
+#   echo 'YOUR_TOKEN' > /tmp/ngrok_token && chmod 600 /tmp/ngrok_token
 #
-# Needs an ngrok authtoken. Get one at https://dashboard.ngrok.com → your
-# account -> Auth Tokens. Paste it below — it is written to the ngrok config
-# in your Studio home, never into this repo.
+# The DOMAIN is your ngrok reserved domain (free accounts get one). Static
+# across restarts, so the endpoint URL survives Studio restarts — no more
+# new-URL-every-run. Note: a reserved domain binds to exactly ONE live tunnel;
+# if the Strata lane endpoint is still up somewhere, shut it down first or
+# ngrok will refuse this session with a "domain in use" error.
+#
+# Cost: the tunnel is free, but it keeps the GPU awake at ~$3.82/h. The cell 6
+# watchdog still hard-stops everything at its deadline.
 
-NGROK_TOKEN="PASTE_YOUR_NGROK_TOKEN"
+NGROK_TOKEN="${NGROK_TOKEN:-$(cat /tmp/ngrok_token 2>/dev/null)}"
+DOMAIN="${NGROK_DOMAIN:-pseudoasymmetric-unbodied-sabine.ngrok-free.dev}"
 PORT=8080
 WORK="${QI21_WORK:-$HOME/qwenimage21}"
 LOG="$WORK/ngrok.log"
 
 case "$NGROK_TOKEN" in
-  PASTE_*) echo "paste your ngrok token at the top of this cell first"; exit 1 ;;
+  ""|PASTE_*) echo "no ngrok token: run  echo 'YOUR_TOKEN' > /tmp/ngrok_token  first"; exit 1 ;;
 esac
 
 # ---- 1. sanity: is the server actually up before we tunnel to it? ---------
@@ -42,11 +48,14 @@ fi
 /tmp/ngrok config add-authtoken "$NGROK_TOKEN" > /dev/null 2>&1 \
   && echo "ngrok auth ok" || { echo "!! ngrok rejected the token"; exit 1; }
 
-# ---- 3. launch the tunnel -------------------------------------------------
-# Kill before launch, as separate commands — same hard-won rule as cell 6.
-pkill -f "ngrok http" 2>/dev/null
+# ---- 3. launch the tunnel on the reserved domain --------------------------
+# Kill before launch, as separate commands — the pkill pattern must not match
+# this script's own argv, hence the [t] bracket trick.
+pkill -f "ngrok [h]ttp" 2>/dev/null
 sleep 2
-nohup /tmp/ngrok http --log=stdout --log-level=info "$PORT" > "$LOG" 2>&1 &
+DOMAIN_ARG=""
+[ -n "$DOMAIN" ] && DOMAIN_ARG="--domain=$DOMAIN"
+nohup /tmp/ngrok http $DOMAIN_ARG --log=stdout --log-level=info "$PORT" > "$LOG" 2>&1 &
 
 sleep 12
 
@@ -54,14 +63,14 @@ URL=$(grep -oE 'https://[a-z0-9-]+\.(ngrok-free\.app|ngrok\.io|ngrok-free\.dev)'
 
 echo ""
 if [ -z "$URL" ]; then
-  echo "!! no public URL in the log yet — paste the log below:"
+  echo "!! no public URL in the log — paste the log below:"
   tail -20 "$LOG"
   exit 1
 fi
 
 echo "############################################################"
 echo "#  PUBLIC ENDPOINT LIVE"
-echo "#  URL     : $URL"
+echo "#  URL     : $URL   (reserved domain — stable across restarts)"
 echo "#  API KEY : (the one cell 6 printed)"
 echo "#"
 echo "#  test it:"
@@ -77,6 +86,6 @@ echo "#    from openai import OpenAI"
 echo "#    OpenAI(base_url=\"$URL/v1\", api_key=\"<KEY>\").images.generate("
 echo "#        model=\"qwen-image-2.1\", prompt=\"a red panda barista\")"
 echo ""
-echo "#  STOP BILLING NOW:  pkill -f qi21_server.py"
+echo "#  STOP BILLING NOW:  pkill -f qi21_[s]erver.py ; pkill -f \"ngrok [h]ttp\""
 echo "#  watchdog still caps this at the cell 6 limit."
 echo "############################################################"
