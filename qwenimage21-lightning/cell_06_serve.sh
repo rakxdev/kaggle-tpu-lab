@@ -145,6 +145,7 @@ DOCS_HTML = r"""<!doctype html>
 <title>Qwen-Image-2.1 API — Reference</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0b0c0f;
     --bg-raised: #101218;
     --surface: #14161c;
@@ -191,6 +192,10 @@ DOCS_HTML = r"""<!doctype html>
   }
   .mark { width: 22px; height: 22px; flex: 0 0 auto; }
   .top .name { font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; }
+  @media (max-width: 700px) {
+    .baseurl { display: none; }
+    .top .name { font-size: 13.5px; white-space: nowrap; }
+  }
   .top .ver {
     font: 600 11px var(--mono); color: var(--brand);
     border: 1px solid color-mix(in srgb, var(--brand) 40%, transparent);
@@ -214,6 +219,8 @@ DOCS_HTML = r"""<!doctype html>
 
   /* ---------- layout ---------- */
   .shell { display: grid; grid-template-columns: 256px minmax(0,1fr); }
+  .shell > * { min-width: 0; }   /* grid items must be allowed to shrink below min-content */
+  main > * { min-width: 0; }
   @media (max-width: 960px) { .shell { grid-template-columns: 1fr; } }
 
   nav.side {
@@ -230,9 +237,41 @@ DOCS_HTML = r"""<!doctype html>
     }
   }
   nav .group { margin-bottom: 22px; }
+  .hamburger {
+    display: none;
+    appearance: none; -webkit-appearance: none;
+    background: transparent; border: 0;
+    cursor: pointer; color: var(--text);
+    align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 8px;
+  }
+  .hamburger svg { width: 20px; height: 20px; }
+  .hamburger:hover { color: var(--brand); background: var(--surface); }
+  .hamburger[aria-expanded="true"] { color: var(--brand); background: var(--surface); }
+  .backdrop {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(5,6,9,.55);
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s ease-out;
+  }
+  .backdrop.show { opacity: 1; pointer-events: auto; }
+  @media (max-width: 960px) {
+    .hamburger { display: inline-flex; }
+    nav.side {
+      position: fixed; top: 0; bottom: 0; left: 0;
+      width: min(82vw, 320px); height: 100dvh;
+      z-index: 90;
+      background: var(--bg-raised);
+      border-right: 1px solid var(--border);
+      transform: translateX(-103%);
+      transition: transform .22s ease-out;
+      padding-top: 18px;
+    }
+    nav.side.open { transform: none; box-shadow: 12px 0 40px rgba(0,0,0,.45); }
+  }
   nav .group h4 {
     margin: 0 0 6px; padding: 0 10px;
-    font-size: 10.5px; font-weight: 700; letter-spacing: .09em;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .08em;
     text-transform: uppercase; color: var(--muted);
   }
   nav a {
@@ -284,7 +323,10 @@ DOCS_HTML = r"""<!doctype html>
   .ep-desc { color: var(--text-2); font-size: 13.5px; margin: 8px 0 0; }
 
   /* ---------- tables ---------- */
-  table { width: 100%; border-collapse: collapse; margin: 12px 0 6px; font-size: 13.5px; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 12px 0 6px; font-size: 13.5px;
+    display: block; overflow-x: auto;   /* narrow screens scroll the table, not the page */
+  }
   th {
     text-align: left; font-size: 11px; font-weight: 700;
     letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
@@ -359,6 +401,9 @@ DOCS_HTML = r"""<!doctype html>
 <body>
 
 <header class="top">
+  <button type="button" class="hamburger" aria-label="Open contents" aria-expanded="false" aria-controls="toc-groups">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
   <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" stroke="#e8a33d" stroke-width="1.6"/>
     <circle cx="12" cy="12" r="4.2" stroke="#e8a33d" stroke-width="1.6"/>
@@ -374,9 +419,11 @@ DOCS_HTML = r"""<!doctype html>
     </button>
   </span>
 </header>
+<div class="backdrop" aria-hidden="true"></div>
 
 <div class="shell">
-<nav class="side" aria-label="Sections">
+<nav class="side" id="toc-groups" aria-label="Sections">
+  <div class="groups">
   <div class="group">
     <h4>Getting started</h4>
     <a href="#overview">Overview</a>
@@ -403,6 +450,7 @@ DOCS_HTML = r"""<!doctype html>
     <h4>Reference</h4>
     <a href="#limits">Limits &amp; config</a>
     <a href="#performance">Measured performance</a>
+  </div>
   </div>
 </nav>
 
@@ -783,6 +831,28 @@ document.querySelectorAll(".copy").forEach(function (btn) {
       ta.value = text; document.body.appendChild(ta); ta.select();
       document.execCommand("copy"); ta.remove(); done();
     }
+  });
+});
+
+// ---- mobile slide-in drawer ----
+var ham = document.querySelector(".hamburger");
+var side = document.querySelector("nav.side");
+var backdrop = document.querySelector(".backdrop");
+function setDrawer(open) {
+  side.classList.toggle("open", open);
+  backdrop.classList.toggle("show", open);
+  ham.setAttribute("aria-expanded", open ? "true" : "false");
+  document.documentElement.style.overflow = open ? "hidden" : "";
+}
+ham.addEventListener("click", function () { setDrawer(!side.classList.contains("open")); });
+backdrop.addEventListener("click", function () { setDrawer(false); });
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && side.classList.contains("open")) { setDrawer(false); ham.focus(); }
+});
+// picking a destination closes the drawer and jumps straight there
+links.forEach(function (a) {
+  a.addEventListener("click", function () {
+    if (window.matchMedia("(max-width: 960px)").matches) setDrawer(false);
   });
 });
 
@@ -1327,6 +1397,7 @@ if __name__ == "__main__":
     # worker gets its own pipeline and its own dispatcher.
     print(f"uvicorn up: {WORKERS} workers, queue=sqlite-wal, sync wait {SYNC_WAIT_S}s", flush=True)
     uvicorn.run("qi21_server:app", host="0.0.0.0", port=PORT, workers=WORKERS, log_level="warning")
+
 QISERVER_EOF
 echo "wrote qi21_server.py from the embedded copy ($(wc -c < qi21_server.py) bytes)"
 
