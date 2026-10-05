@@ -25,10 +25,11 @@ cd "$WORK" || exit 1
 # disk. It is embedded here verbatim (the copy beside this cell in the repo is
 # the canonical one you read and edit; this is the same bytes). The heredoc
 # is quoted so nothing is expanded at write time.
-if [ -f qi21_server.py ] && grep -q QI21_API_KEY qi21_server.py 2>/dev/null; then
-  echo "server file already present — keeping it"
-else
-  cat > qi21_server.py <<'QISERVER_EOF'
+# ALWAYS overwrite: an earlier "keep if present" guard silently relaunched the
+# OLD server after an update — the file existed, so the new embedded bytes
+# never landed and /ui 404'd (seen live 2026-10-05). The kit copy is the only
+# source of truth; do not hand-edit the $WORK copy.
+cat > qi21_server.py <<'QISERVER_EOF'
 #!/usr/bin/env python3
 """Qwen-Image-2.1 HTTP server — full BF16 on a 96 GB card, one model in VRAM.
 
@@ -724,8 +725,7 @@ if __name__ == "__main__":
     # each load their own 33.1 GB copy and defeat both the lock and the VRAM.
     uvicorn.run(app, host="0.0.0.0", port=PORT, workers=1, log_level="info")
 QISERVER_EOF
-  echo "wrote qi21_server.py from the embedded copy"
-fi
+echo "wrote qi21_server.py from the embedded copy ($(wc -c < qi21_server.py) bytes)"
 
 # ---- 1. credentials -------------------------------------------------------
 # The key lives in the environment and is printed once. It is NOT written into
