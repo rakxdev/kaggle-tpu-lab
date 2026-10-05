@@ -147,6 +147,7 @@
   }
   #busybox .t { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   #busybox .s { color: var(--muted); font-size: 12px; }
+  #busybox .q { color: var(--accent); font-size: 15px; font-weight: 700; margin-bottom: 2px; }
 
   .meta { display: flex; gap: 14px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
   .meta button {
@@ -179,7 +180,7 @@
 
 <header>
   <h1>Qwen-Image-2.1</h1>
-  <span class="sub">full BF16 · single H200</span>
+  <span class="sub">full BF16 · queued · never rejects</span>
   <span class="spacer"></span>
   <span id="health" class=""><span class="dot"></span><span id="health-text">checking…</span></span>
 </header>
@@ -257,8 +258,9 @@
         <img id="image" alt="Generated image">
         <div id="shimmer" hidden></div>
         <div id="busybox" hidden>
+          <div class="q" id="queue-pos" hidden></div>
           <div class="t" id="elapsed">0.0s</div>
-          <div class="s" id="busy-sub">denoising…</div>
+          <div class="s" id="busy-sub"></div>
         </div>
       </div>
       <div id="empty">
@@ -282,17 +284,16 @@ var $ = function (id) { return document.getElementById(id); };
 var els = {
   prompt: $("prompt"), negative: $("negative"), width: $("width"), height: $("height"),
   steps: $("steps"), stepsVal: $("steps-val"), cfg: $("cfg"), seed: $("seed"),
-  key: $("key"), generate: $("generate"), statusbar: $("statusbar"),
+  key: $("key"), fast: $("fast"), generate: $("generate"), statusbar: $("statusbar"),
   stage: $("stage"), image: $("image"), shimmer: $("shimmer"), busybox: $("busybox"),
-  elapsed: $("elapsed"), busySub: $("busy-sub"), empty: $("empty"),
+  elapsed: $("elapsed"), busySub: $("busy-sub"), queuePos: $("queue-pos"), empty: $("empty"),
   meta: $("meta"), metaInfo: $("meta-info"), download: $("download"),
   history: $("history"), health: $("health"), healthText: $("health-text"),
   useLast: $("use-last"), randomize: $("randomize"),
 };
 
-var busy = false, timer = null, t0 = 0;
-var elsFast = $("fast");
-var gallery = [];   // {url, seed, width, height, steps, seconds}
+var busy = false, timer = null, t0 = 0, pollTimer = null;
+var gallery = [];   // {url, seed, width, height, steps, seconds, fast}
 var current = -1;
 
 // ---- api key: persisted locally, never sent anywhere but this origin ----
@@ -300,13 +301,20 @@ els.key.value = localStorage.getItem("qi21_key") || "";
 els.key.addEventListener("change", function () {
   localStorage.setItem("qi21_key", els.key.value.trim());
 });
+function authHeaders(extra) {
+  var h = extra || {};
+  h["Authorization"] = "Bearer " + els.key.value.trim();
+  h["ngrok-skip-browser-warning"] = "true";
+  return h;
+}
 
 // ---- health ping ----
 function ping() {
   fetch("/health").then(function (r) { return r.json(); }).then(function (d) {
     els.health.className = d.status === "ok" ? "ok" : "";
+    var q = (typeof d.queued === "number" && d.queued >= 0) ? " · queue " + d.queued : "";
     els.healthText.textContent = d.status === "ok"
-      ? "live · " + d.resident_gib + " GiB resident" + (d.busy ? " · busy" : " · idle")
+      ? "live · " + d.resident_gib + " GiB · " + d.workers + " workers" + q
       : "loading";
   }).catch(function () {
     els.health.className = "";
@@ -339,7 +347,18 @@ function setStatus(msg, cls) {
   els.statusbar.className = cls || "";
 }
 
-// ---- generate ----
+function stopBusy() {
+  busy = false;
+  if (timer) { clearInterval(timer); timer = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  els.generate.disabled = false;
+  els.generate.textContent = "Generate";
+  els.shimmer.hidden = true;
+  els.busybox.hidden = true;
+  els.image.classList.remove("busy");
+}
+
+// ---- submit + poll (never-fail queue: 202 -> job id -> status) ----
 function generate() {
   if (busy) return;
   var prompt = els.prompt.value.trim();
@@ -349,82 +368,133 @@ function generate() {
 
   busy = true;
   els.generate.disabled = true;
-  els.generate.textContent = "Generating…";
+  els.generate.textContent = "Queued…";
   els.empty.hidden = true;
   els.image.classList.add("busy");
   els.shimmer.hidden = false;
   els.busybox.hidden = false;
   els.stage.hidden = false;
+  els.queuePos.hidden = false;
+  els.queuePos.textContent = "submitting…";
+  els.busySub.textContent = "";
   setStatus("", "");
-
-  var steps = parseInt(els.steps.value, 10) || 28;
-  if (elsFast.checked) { steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
   t0 = performance.now();
   timer = setInterval(function () {
-    var dt = (performance.now() - t0) / 1000;
-    els.elapsed.textContent = dt.toFixed(1) + "s";
-    els.busySub.textContent = (elsFast.checked ? "fast lane · " : "denoising · ") + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
+    els.elapsed.textContent = ((performance.now() - t0) / 1000).toFixed(1) + "s";
   }, 100);
 
   var body = {
     prompt: prompt,
-    fast: elsFast.checked,
     width: parseInt(els.width.value, 10) || 1024,
     height: parseInt(els.height.value, 10) || 1024,
-    steps: steps,
+    steps: parseInt(els.steps.value, 10) || 28,
     cfg: parseFloat(els.cfg.value) || 1.0,
     seed: parseInt(els.seed.value, 10),
+    fast: els.fast.checked,
   };
+  if (body.fast) { body.steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
   if (els.negative.value.trim() && body.cfg > 1) body.negative_prompt = els.negative.value.trim();
 
-  fetch("/v1/images/generations", {
+  fetch("/generate", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + key,
-      "ngrok-skip-browser-warning": "true"
-    },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body)
   }).then(function (r) {
     return r.json().then(function (d) { return { status: r.status, data: d }; });
   }).then(function (res) {
-    clearInterval(timer); busy = false;
-    els.generate.disabled = false;
-    els.generate.textContent = "Generate";
-    els.shimmer.hidden = true;
-    els.busybox.hidden = true;
-    els.image.classList.remove("busy");
-
-    if (res.status !== 200) {
-      var msg = (res.data && (res.data.error || res.data.detail)) || ("HTTP " + res.status);
-      setStatus(msg + (res.status === 429 ? " — the card is busy; retry in a few seconds." : ""), "error");
+    if (res.status === 401) {
+      stopBusy();
       if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+      setStatus("bad API key — paste the one from the cell 6 banner.", "error");
       return;
     }
-
-    var d = res.data;
-    var b64 = d.data[0].b64_json;
-    var bin = atob(b64), n = bin.length, bytes = new Uint8Array(n);
-    for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
-    var url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
-
-    els.image.src = url;
-    els.stage.hidden = false;
-    current = gallery.length;
-    gallery.push({ url: url, seed: d.seed, width: d.width, height: d.height, steps: d.steps, seconds: d.seconds, prompt: prompt });
-    els.meta.hidden = false;
-    els.metaInfo.textContent = (d.fast ? "FAST · " : "") + d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
-    els.download.hidden = false;
-    renderHistory();
-    setStatus("done in " + d.seconds + " s (" + d.seconds_per_step + " s/step)", "info");
+    if (res.status !== 202) {
+      stopBusy();
+      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+      setStatus((res.data && (res.data.error || res.data.detail)) || ("HTTP " + res.status), "error");
+      return;
+    }
+    setStatus("accepted — you are in the queue", "info");
+    poll(res.data.job_id, 600);
   }).catch(function (err) {
-    clearInterval(timer); busy = false;
-    els.generate.disabled = false;
-    els.generate.textContent = "Generate";
-    els.shimmer.hidden = true; els.busybox.hidden = true;
-    els.image.classList.remove("busy");
+    stopBusy();
+    if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
     setStatus("request failed: " + err.message, "error");
   });
+}
+
+function poll(jobId, waitMs) {
+  pollTimer = setTimeout(function () {
+    fetch("/jobs/" + jobId, { headers: authHeaders() })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+      .then(function (res) {
+        if (res.status !== 200) {
+          if (res.status === 404) setStatus("job expired — generate again.", "error");
+          else setStatus("status check failed: HTTP " + res.status, "error");
+          stopBusy();
+          return;
+        }
+        var d = res.data;
+        if (d.status === "queued") {
+          var n = (typeof d.queue_position === "number") ? d.queue_position + 1 : "?";
+          els.queuePos.hidden = false;
+          els.queuePos.textContent = "you are #" + n + " in queue";
+          els.busySub.textContent = "your slot is reserved — queued jobs are never dropped";
+          els.generate.textContent = "Queued…";
+          poll(jobId, n <= 3 ? 800 : 2000);
+          return;
+        }
+        if (d.status === "rendering") {
+          els.queuePos.hidden = true;
+          els.busySub.textContent = "rendering on a free worker…";
+          els.generate.textContent = "Rendering…";
+          poll(jobId, 900);
+          return;
+        }
+        if (d.status === "done") {
+          finishDone(d);
+          return;
+        }
+        // error | canceled
+        stopBusy();
+        if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+        setStatus(d.error || ("job " + d.status), "error");
+      })
+      .catch(function (err) {
+        // transient network hiccup — the queue never drops the job, so retry
+        setStatus("connection hiccup — still polling (" + err.message + ")", "info");
+        poll(jobId, 2000);
+      });
+  }, waitMs);
+}
+
+function finishDone(d) {
+  stopBusy();
+  var m = d.result || {};
+  fetch(d.result_url, { headers: authHeaders() })
+    .then(function (r) {
+      if (!r.ok) throw new Error("result fetch HTTP " + r.status);
+      return r.blob();
+    })
+    .then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      els.image.src = url;
+      els.stage.hidden = false;
+      current = gallery.length;
+      gallery.push({ url: url, seed: m.seed, width: m.width, height: m.height,
+                     steps: m.steps, seconds: m.seconds, fast: m.fast,
+                     prompt: els.prompt.value.trim() });
+      els.meta.hidden = false;
+      els.metaInfo.textContent = (m.fast ? "FAST · " : "") + m.width + "×" + m.height +
+        " · " + m.steps + " steps · " + m.seconds + " s · seed " + m.seed;
+      els.download.hidden = false;
+      renderHistory();
+      setStatus("done in " + m.seconds + " s (" + m.seconds_per_step + " s/step)", "info");
+    })
+    .catch(function (err) {
+      setStatus("render finished but the image could not be fetched: " + err.message, "error");
+      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+    });
 }
 
 els.generate.addEventListener("click", generate);
@@ -459,7 +529,8 @@ function renderHistory() {
       els.image.src = g.url;
       els.stage.hidden = false; els.empty.hidden = true;
       els.meta.hidden = false;
-      els.metaInfo.textContent = g.width + "×" + g.height + " · " + g.steps + " steps · " + g.seconds + " s · seed " + g.seed;
+      els.metaInfo.textContent = (g.fast ? "FAST · " : "") + g.width + "×" + g.height +
+        " · " + g.steps + " steps · " + g.seconds + " s · seed " + g.seed;
       renderHistory();
     });
     els.history.appendChild(b);

@@ -1,85 +1,101 @@
 #!/usr/bin/env python3
-"""Qwen-Image-2.1 HTTP server — full BF16 on a 96 GB card, one model in VRAM.
+"""Qwen-Image-2.1 HTTP server — full BF16, N workers, never-failing job queue.
 
-Written by cell_06_serve.sh (which is the canonical copy — this file is here
-so you can read/edit the server without digging through a heredoc).
+Written by cell_06_serve.sh (the canonical readable copy lives beside it in the
+kit; the cell embeds these exact bytes).
 
-DESIGN NOTES — the three decisions that matter:
+ARCHITECTURE — what changed and why (2026-10-06):
 
-1. **One request at a time, enforced by a lock.** This is the single most
-   important line in the file. `QwenImage21Pipeline` is NOT thread-safe: two
-   concurrent `.()` calls share one set of module buffers and will corrupt
-   each other's latents or blow up VRAM. `asyncio.Lock` turns a pile of
-   simultaneous requests into an orderly queue instead. uvicorn is started
-   with ONE worker (cell 6) because a lock is per-process and would not
-   protect anything if there were several.
+1. **The queue is the scheduler now.** POST /generate never renders inline and
+   NEVER rejects for capacity: it inserts a row into a SQLite (WAL) job store
+   and returns 202 {job_id, queue_position}. No 429s exist anywhere. This is
+   the fal.ai queue pattern (their docs: "requests in the queue are never
+   dropped", "no queue size limit").
 
-   The mechanism is the scheduler, not a guess: `FlowMatchEulerDiscreteScheduler
-   .set_timesteps` mutates `self.timesteps`/`self.sigmas`, so two interleaved
-   calls corrupt each other's denoising schedule. The same class of bug was
-   hit and fixed for StableDiffusionPipeline in diffusers#3672 (an IndexError
-   from `self.alphas_cumprod[timestep]` inside the scheduler under two
-   threads). There is no official diffusers statement about lock-vs-not for
-   QwenImage21Pipeline specifically — this rests on #3672 plus that scheduler
-   mutability, so treat it as strongly evidenced rather than documented.
-   `enable_model_cpu_offload()` would be doubly unsafe (it mutates module
-   .to()/.cpu() state per call); on 96 GB we never need it.
+2. **SQLite in WAL mode is the cross-worker queue.** With uvicorn workers=N
+   there are N separate processes; asyncio.Queue/Lock are per-process and
+   cannot route jobs between them (documented FastAPI pitfall). One DB file on
+   disk, opened by all workers: BEGIN IMMEDIATE gives a serialized atomic
+   claim, ORDER BY seq gives strict FIFO fairness — the closest queue number
+   takes the next free worker, exactly the required behavior. The DB survives
+   worker crashes and Studio restarts; pending jobs are just rows (~300 bytes).
 
-2. **429, not a hang.** When the lock is held the caller gets a fast, honest
-   "busy, retry shortly" with a Retry-After, instead of a connection that
-   sits open for minutes and looks like a dead server. That is also what
-   keeps a shared public endpoint from being walked all over by one client.
+3. **N workers, one pipeline each.** QI21_WORKERS (default 3) uvicorn workers,
+   each loading its own 30.2 GiB pipeline in its startup hook (3 x 30.2 = 90.6
+   GiB resident; worst measured mix ~130 GiB < 139.8). Each runs a dispatcher
+   task: claim oldest queued row -> render -> write result PNG -> mark done.
+   The in-process GPU_LOCK stays as defense-in-depth (pipelines are not
+   thread-safe), but HTTP handlers never touch it — only dispatchers do.
 
-3. **Base64 PNG in, base64 PNG out.** One POST -> one JSON response, so it
-   works from curl without a multipart parser and from any HTTP client. The
-   `/v1/images/generations` path is a deliberate alias of `/generate` so
-   OpenAI-shaped clients can be pointed at it, but note this is NOT a real
-   OpenAI endpoint: the response body is our own shape and `b64_json` is PNG
-   data, so a client expecting OpenAI's exact schema will need a shim.
+4. **PNG encoding never blocks anything.** Encoded by the dispatcher after the
+   render, compress_level=1 (transport, not archival). Results live as PNG
+   files under WORK/results/{job_id}.png with a 24h TTL cleanup (Replicate
+   deletes after 1h; we are kinder).
 
-Auth is a bearer token read from the environment (never from this file, never
-committed). The weights come from the Studio-local snapshot that cell 3
-downloaded — no download at serve time, no HuggingFace token needed.
+5. **OpenAI compatibility kept:** /v1/images/generations submits a job, then
+   polls the store for up to QI21_SYNC_WAIT_S (default 120 s) and returns the
+   OpenAI-shaped body (data[0].b64_json). If the queue is deeper than the
+   wait, it returns the 202 job envelope instead of an error — the queue can
+   delay a response, never reject it.
+
+6. **Fast lane unchanged and opt-in:** fast=true forces Turbo8 8 steps, cfg
+   1.0, its shift_terminal-unset scheduler (swapped under the lock, restored
+   after). Base quality remains the default for every other request.
+
+Fairness/positions: position = COUNT(queued rows with smaller seq). Recomputed
+on every poll — always fresh, never drifts. Human numbering adds one.
 """
 
 import asyncio
 import base64
 import io
+import json
 import os
 import pathlib
+import secrets
+import sqlite3
 import time
+import uuid
+from contextlib import asynccontextmanager
 
 import torch
 from diffusers import FlowMatchEulerDiscreteScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 WORK = pathlib.Path(os.environ.get("QI21_WORK", pathlib.Path.home() / "qwenimage21"))
 PORT = int(os.environ.get("QI21_PORT", "8080"))
 TOKEN = os.environ.get("QI21_API_KEY", "")
+WORKERS = int(os.environ.get("QI21_WORKERS", "3"))
 
-# Hard ceiling on a single request. Cell 5 measures the real cost; this is
+# Hard ceilings on a single request. Cell 5 measures the real cost; this is
 # only a backstop so a runaway 4K render cannot pin the card for an hour.
 MAX_STEPS = int(os.environ.get("QI21_MAX_STEPS", "50"))
 MAX_PIXELS = int(os.environ.get("QI21_MAX_PIXELS", str(2048 * 2048)))
+SYNC_WAIT_S = float(os.environ.get("QI21_SYNC_WAIT_S", "120"))
+RENDER_LEASE_S = float(os.environ.get("QI21_RENDER_LEASE_S", "900"))
+RESULT_TTL_S = float(os.environ.get("QI21_RESULT_TTL_S", "86400"))
+MAX_REQUEUES = 3
 
-# THE lock. See design note 1 — do not remove this.
+RESULTS = WORK / "results"
+DB_PATH = WORK / "jobs.db"
+
+# THE lock: pipelines are not thread-safe (scheduler state mutates per call).
+# Only dispatcher coroutines touch it; with one dispatcher per worker process
+# it is trivially uncontended — kept so that ever running >1 dispatcher in a
+# process stays safe.
 GPU_LOCK = asyncio.Lock()
 
-app = FastAPI(title="Qwen-Image-2.1", version="1.0")
 PIPE = None
-BOOT_T = time.time()
-# Fast lane (opt-in): Turbo8 distilled LoRA + its required scheduler. Built at
-# boot; if it fails the server still serves base quality and /health says so.
-FAST_READY = False
-FAST_SCHEDULER = None
 BASE_SCHEDULER = None
+FAST_SCHEDULER = None
+FAST_READY = False
+BOOT_T = time.time()
+WORKER_ID = f"worker-{os.getpid()}"
 
-# The browser UI, embedded verbatim from the kit's qi21_ui.html (the canonical,
-# readable copy — this string must stay byte-identical to it; cell_06_serve.sh's
-# build step verifies). Served same-origin at / and /ui, which is why the UI
-# needs no CORS config and no separate host.
+# The browser UI, embedded verbatim from the kit's qi21_ui.html (byte-identity
+# is verified by cell_06_serve.sh's build step). Same-origin => no CORS.
 UI_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -229,6 +245,7 @@ UI_HTML = r"""<!doctype html>
   }
   #busybox .t { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   #busybox .s { color: var(--muted); font-size: 12px; }
+  #busybox .q { color: var(--accent); font-size: 15px; font-weight: 700; margin-bottom: 2px; }
 
   .meta { display: flex; gap: 14px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
   .meta button {
@@ -261,7 +278,7 @@ UI_HTML = r"""<!doctype html>
 
 <header>
   <h1>Qwen-Image-2.1</h1>
-  <span class="sub">full BF16 · single H200</span>
+  <span class="sub">full BF16 · queued · never rejects</span>
   <span class="spacer"></span>
   <span id="health" class=""><span class="dot"></span><span id="health-text">checking…</span></span>
 </header>
@@ -339,8 +356,9 @@ UI_HTML = r"""<!doctype html>
         <img id="image" alt="Generated image">
         <div id="shimmer" hidden></div>
         <div id="busybox" hidden>
+          <div class="q" id="queue-pos" hidden></div>
           <div class="t" id="elapsed">0.0s</div>
-          <div class="s" id="busy-sub">denoising…</div>
+          <div class="s" id="busy-sub"></div>
         </div>
       </div>
       <div id="empty">
@@ -364,17 +382,16 @@ var $ = function (id) { return document.getElementById(id); };
 var els = {
   prompt: $("prompt"), negative: $("negative"), width: $("width"), height: $("height"),
   steps: $("steps"), stepsVal: $("steps-val"), cfg: $("cfg"), seed: $("seed"),
-  key: $("key"), generate: $("generate"), statusbar: $("statusbar"),
+  key: $("key"), fast: $("fast"), generate: $("generate"), statusbar: $("statusbar"),
   stage: $("stage"), image: $("image"), shimmer: $("shimmer"), busybox: $("busybox"),
-  elapsed: $("elapsed"), busySub: $("busy-sub"), empty: $("empty"),
+  elapsed: $("elapsed"), busySub: $("busy-sub"), queuePos: $("queue-pos"), empty: $("empty"),
   meta: $("meta"), metaInfo: $("meta-info"), download: $("download"),
   history: $("history"), health: $("health"), healthText: $("health-text"),
   useLast: $("use-last"), randomize: $("randomize"),
 };
 
-var busy = false, timer = null, t0 = 0;
-var elsFast = $("fast");
-var gallery = [];   // {url, seed, width, height, steps, seconds}
+var busy = false, timer = null, t0 = 0, pollTimer = null;
+var gallery = [];   // {url, seed, width, height, steps, seconds, fast}
 var current = -1;
 
 // ---- api key: persisted locally, never sent anywhere but this origin ----
@@ -382,13 +399,20 @@ els.key.value = localStorage.getItem("qi21_key") || "";
 els.key.addEventListener("change", function () {
   localStorage.setItem("qi21_key", els.key.value.trim());
 });
+function authHeaders(extra) {
+  var h = extra || {};
+  h["Authorization"] = "Bearer " + els.key.value.trim();
+  h["ngrok-skip-browser-warning"] = "true";
+  return h;
+}
 
 // ---- health ping ----
 function ping() {
   fetch("/health").then(function (r) { return r.json(); }).then(function (d) {
     els.health.className = d.status === "ok" ? "ok" : "";
+    var q = (typeof d.queued === "number" && d.queued >= 0) ? " · queue " + d.queued : "";
     els.healthText.textContent = d.status === "ok"
-      ? "live · " + d.resident_gib + " GiB resident" + (d.busy ? " · busy" : " · idle")
+      ? "live · " + d.resident_gib + " GiB · " + d.workers + " workers" + q
       : "loading";
   }).catch(function () {
     els.health.className = "";
@@ -421,7 +445,18 @@ function setStatus(msg, cls) {
   els.statusbar.className = cls || "";
 }
 
-// ---- generate ----
+function stopBusy() {
+  busy = false;
+  if (timer) { clearInterval(timer); timer = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  els.generate.disabled = false;
+  els.generate.textContent = "Generate";
+  els.shimmer.hidden = true;
+  els.busybox.hidden = true;
+  els.image.classList.remove("busy");
+}
+
+// ---- submit + poll (never-fail queue: 202 -> job id -> status) ----
 function generate() {
   if (busy) return;
   var prompt = els.prompt.value.trim();
@@ -431,82 +466,133 @@ function generate() {
 
   busy = true;
   els.generate.disabled = true;
-  els.generate.textContent = "Generating…";
+  els.generate.textContent = "Queued…";
   els.empty.hidden = true;
   els.image.classList.add("busy");
   els.shimmer.hidden = false;
   els.busybox.hidden = false;
   els.stage.hidden = false;
+  els.queuePos.hidden = false;
+  els.queuePos.textContent = "submitting…";
+  els.busySub.textContent = "";
   setStatus("", "");
-
-  var steps = parseInt(els.steps.value, 10) || 28;
-  if (elsFast.checked) { steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
   t0 = performance.now();
   timer = setInterval(function () {
-    var dt = (performance.now() - t0) / 1000;
-    els.elapsed.textContent = dt.toFixed(1) + "s";
-    els.busySub.textContent = (elsFast.checked ? "fast lane · " : "denoising · ") + steps + " steps · ~" + (dt / steps).toFixed(2) + " s/step so far";
+    els.elapsed.textContent = ((performance.now() - t0) / 1000).toFixed(1) + "s";
   }, 100);
 
   var body = {
     prompt: prompt,
-    fast: elsFast.checked,
     width: parseInt(els.width.value, 10) || 1024,
     height: parseInt(els.height.value, 10) || 1024,
-    steps: steps,
+    steps: parseInt(els.steps.value, 10) || 28,
     cfg: parseFloat(els.cfg.value) || 1.0,
     seed: parseInt(els.seed.value, 10),
+    fast: els.fast.checked,
   };
+  if (body.fast) { body.steps = 8; els.steps.value = 8; els.stepsVal.textContent = "8"; }
   if (els.negative.value.trim() && body.cfg > 1) body.negative_prompt = els.negative.value.trim();
 
-  fetch("/v1/images/generations", {
+  fetch("/generate", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + key,
-      "ngrok-skip-browser-warning": "true"
-    },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body)
   }).then(function (r) {
     return r.json().then(function (d) { return { status: r.status, data: d }; });
   }).then(function (res) {
-    clearInterval(timer); busy = false;
-    els.generate.disabled = false;
-    els.generate.textContent = "Generate";
-    els.shimmer.hidden = true;
-    els.busybox.hidden = true;
-    els.image.classList.remove("busy");
-
-    if (res.status !== 200) {
-      var msg = (res.data && (res.data.error || res.data.detail)) || ("HTTP " + res.status);
-      setStatus(msg + (res.status === 429 ? " — the card is busy; retry in a few seconds." : ""), "error");
+    if (res.status === 401) {
+      stopBusy();
       if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+      setStatus("bad API key — paste the one from the cell 6 banner.", "error");
       return;
     }
-
-    var d = res.data;
-    var b64 = d.data[0].b64_json;
-    var bin = atob(b64), n = bin.length, bytes = new Uint8Array(n);
-    for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
-    var url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
-
-    els.image.src = url;
-    els.stage.hidden = false;
-    current = gallery.length;
-    gallery.push({ url: url, seed: d.seed, width: d.width, height: d.height, steps: d.steps, seconds: d.seconds, prompt: prompt });
-    els.meta.hidden = false;
-    els.metaInfo.textContent = (d.fast ? "FAST · " : "") + d.width + "×" + d.height + " · " + d.steps + " steps · " + d.seconds + " s · seed " + d.seed;
-    els.download.hidden = false;
-    renderHistory();
-    setStatus("done in " + d.seconds + " s (" + d.seconds_per_step + " s/step)", "info");
+    if (res.status !== 202) {
+      stopBusy();
+      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+      setStatus((res.data && (res.data.error || res.data.detail)) || ("HTTP " + res.status), "error");
+      return;
+    }
+    setStatus("accepted — you are in the queue", "info");
+    poll(res.data.job_id, 600);
   }).catch(function (err) {
-    clearInterval(timer); busy = false;
-    els.generate.disabled = false;
-    els.generate.textContent = "Generate";
-    els.shimmer.hidden = true; els.busybox.hidden = true;
-    els.image.classList.remove("busy");
+    stopBusy();
+    if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
     setStatus("request failed: " + err.message, "error");
   });
+}
+
+function poll(jobId, waitMs) {
+  pollTimer = setTimeout(function () {
+    fetch("/jobs/" + jobId, { headers: authHeaders() })
+      .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+      .then(function (res) {
+        if (res.status !== 200) {
+          if (res.status === 404) setStatus("job expired — generate again.", "error");
+          else setStatus("status check failed: HTTP " + res.status, "error");
+          stopBusy();
+          return;
+        }
+        var d = res.data;
+        if (d.status === "queued") {
+          var n = (typeof d.queue_position === "number") ? d.queue_position + 1 : "?";
+          els.queuePos.hidden = false;
+          els.queuePos.textContent = "you are #" + n + " in queue";
+          els.busySub.textContent = "your slot is reserved — queued jobs are never dropped";
+          els.generate.textContent = "Queued…";
+          poll(jobId, n <= 3 ? 800 : 2000);
+          return;
+        }
+        if (d.status === "rendering") {
+          els.queuePos.hidden = true;
+          els.busySub.textContent = "rendering on a free worker…";
+          els.generate.textContent = "Rendering…";
+          poll(jobId, 900);
+          return;
+        }
+        if (d.status === "done") {
+          finishDone(d);
+          return;
+        }
+        // error | canceled
+        stopBusy();
+        if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+        setStatus(d.error || ("job " + d.status), "error");
+      })
+      .catch(function (err) {
+        // transient network hiccup — the queue never drops the job, so retry
+        setStatus("connection hiccup — still polling (" + err.message + ")", "info");
+        poll(jobId, 2000);
+      });
+  }, waitMs);
+}
+
+function finishDone(d) {
+  stopBusy();
+  var m = d.result || {};
+  fetch(d.result_url, { headers: authHeaders() })
+    .then(function (r) {
+      if (!r.ok) throw new Error("result fetch HTTP " + r.status);
+      return r.blob();
+    })
+    .then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      els.image.src = url;
+      els.stage.hidden = false;
+      current = gallery.length;
+      gallery.push({ url: url, seed: m.seed, width: m.width, height: m.height,
+                     steps: m.steps, seconds: m.seconds, fast: m.fast,
+                     prompt: els.prompt.value.trim() });
+      els.meta.hidden = false;
+      els.metaInfo.textContent = (m.fast ? "FAST · " : "") + m.width + "×" + m.height +
+        " · " + m.steps + " steps · " + m.seconds + " s · seed " + m.seed;
+      els.download.hidden = false;
+      renderHistory();
+      setStatus("done in " + m.seconds + " s (" + m.seconds_per_step + " s/step)", "info");
+    })
+    .catch(function (err) {
+      setStatus("render finished but the image could not be fetched: " + err.message, "error");
+      if (!gallery.length) { els.stage.hidden = true; els.empty.hidden = false; }
+    });
 }
 
 els.generate.addEventListener("click", generate);
@@ -541,7 +627,8 @@ function renderHistory() {
       els.image.src = g.url;
       els.stage.hidden = false; els.empty.hidden = true;
       els.meta.hidden = false;
-      els.metaInfo.textContent = g.width + "×" + g.height + " · " + g.steps + " steps · " + g.seconds + " s · seed " + g.seed;
+      els.metaInfo.textContent = (g.fast ? "FAST · " : "") + g.width + "×" + g.height +
+        " · " + g.steps + " steps · " + g.seconds + " s · seed " + g.seed;
       renderHistory();
     });
     els.history.appendChild(b);
@@ -551,11 +638,190 @@ function renderHistory() {
 </body>
 </html>"""
 
+app = FastAPI(title="Qwen-Image-2.1", version="2.0")
 
+
+# ---------------------------------------------------------------- job store
+def db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
+def init_db() -> None:
+    WORK.mkdir(parents=True, exist_ok=True)
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    with db() as c:
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS jobs(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT UNIQUE,
+                state TEXT NOT NULL,
+                params TEXT NOT NULL,
+                worker TEXT,
+                error TEXT,
+                requeues INTEGER DEFAULT 0,
+                created_at REAL, started_at REAL, finished_at REAL,
+                result_path TEXT)"""
+        )
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, seq)")
+
+
+def submit_job(params: dict) -> tuple:
+    job_id = uuid.uuid4().hex
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        c.execute(
+            "INSERT INTO jobs(job_id,state,params,created_at) VALUES(?,?,?,?)",
+            (job_id, "queued", json.dumps(params), time.time()),
+        )
+        pos = c.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE state='queued' AND seq>"
+            "(SELECT seq FROM jobs WHERE job_id=?)",
+            (job_id,),
+        ).fetchone()["n"]
+        c.execute("COMMIT")
+    return job_id, pos  # pos = number of jobs ahead of this one (0-based)
+
+
+def claim_next(worker: str):
+    """Atomically claim the oldest queued job. BEGIN IMMEDIATE serializes the
+    claim across processes, so two dispatchers can never take the same row;
+    ORDER BY seq is the FIFO fairness rule."""
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT seq,job_id,params FROM jobs WHERE state='queued' ORDER BY seq LIMIT 1"
+        ).fetchone()
+        if row is None:
+            c.execute("COMMIT")
+            return None
+        c.execute(
+            "UPDATE jobs SET state='rendering',worker=?,started_at=? WHERE job_id=?",
+            (worker, time.time(), row["job_id"]),
+        )
+        c.execute("COMMIT")
+    return dict(row)
+
+
+def finish_job(job_id: str, result_path: str, meta: dict) -> None:
+    with db() as c:
+        c.execute(
+            "UPDATE jobs SET state='done',finished_at=?,result_path=?,error=? WHERE job_id=?",
+            (time.time(), str(result_path), json.dumps(meta), job_id),
+        )
+
+
+def fail_job(job_id: str, message: str) -> None:
+    with db() as c:
+        c.execute(
+            "UPDATE jobs SET state='error',finished_at=?,error=? WHERE job_id=?",
+            (time.time(), message, job_id),
+        )
+
+
+def job_row(job_id: str):
+    with db() as c:
+        return c.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+
+
+def counts() -> dict:
+    try:
+        with db() as c:
+            rows = c.execute(
+                "SELECT state,COUNT(*) AS n FROM jobs GROUP BY state"
+            ).fetchall()
+        d = {r["state"]: r["n"] for r in rows}
+        return {"queued": d.get("queued", 0), "rendering": d.get("rendering", 0)}
+    except Exception:  # noqa: BLE001 — health must never raise
+        return {"queued": -1, "rendering": -1}
+
+
+def sweep() -> None:
+    """Crash recovery + TTL cleanup, run periodically by any dispatcher.
+    - rendering rows whose lease expired (a worker died mid-render) are
+      requeued up to MAX_REQUEUES, then marked error. Queued jobs are never
+      dropped — they wait forever until rendered or canceled.
+    - done/error rows older than RESULT_TTL_S and their PNGs are deleted."""
+    now = time.time()
+    try:
+        with db() as c:
+            stale = c.execute(
+                "SELECT job_id,requeues FROM jobs WHERE state='rendering' AND started_at<?",
+                (now - RENDER_LEASE_S,),
+            ).fetchall()
+            for r in stale:
+                if r["requeues"] + 1 >= MAX_REQUEUES:
+                    fail_job(r["job_id"], "render did not complete (restart budget exceeded)")
+                else:
+                    c.execute(
+                        "UPDATE jobs SET state='queued',worker=NULL,started_at=NULL,"
+                        "requeues=requeues+1 WHERE job_id=?",
+                        (r["job_id"],),
+                    )
+            old = c.execute(
+                "SELECT job_id,result_path FROM jobs WHERE state IN ('done','error','canceled')"
+                " AND finished_at<?",
+                (now - RESULT_TTL_S,),
+            ).fetchall()
+        for r in old:
+            if r["result_path"]:
+                try:
+                    pathlib.Path(r["result_path"]).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            with db() as c:
+                c.execute("DELETE FROM jobs WHERE job_id=?", (r["job_id"],))
+    except Exception as exc:  # noqa: BLE001 — a sweep failure must not kill dispatch
+        print(f"dispatcher sweep error: {exc}", flush=True)
+
+
+# ---------------------------------------------------------------- auth
+def _consteq(a: str, b: str) -> bool:
+    acc = 0
+    for x, y in zip(a.encode(), b.encode()):
+        acc |= x ^ y
+    return acc == 0
+
+
+async def require_token(authorization: str = Header(default="")) -> None:
+    if not TOKEN:
+        raise HTTPException(500, "QI21_API_KEY is not set on the server")
+    expected = f"Bearer {TOKEN}"
+    if len(authorization) != len(expected) or not _consteq(authorization, expected):
+        raise HTTPException(401, "bad or missing bearer token",
+                            headers={"WWW-Authenticate": "Bearer"})
+
+
+# ---------------------------------------------------------------- routes
 @app.get("/ui")
 @app.get("/")
 async def ui():
     return HTMLResponse(UI_HTML)
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok" if PIPE is not None else "loading",
+        "model": "Qwen-Image-2.1",
+        "dtype": "bfloat16",
+        "workers": WORKERS,
+        "worker_id": WORKER_ID,
+        "resident_gib": round(torch.cuda.memory_allocated() / 2**30, 1) if torch.cuda.is_available() else None,
+        "uptime_s": round(time.time() - BOOT_T, 1),
+        "busy": GPU_LOCK.locked(),
+        "fast_ready": FAST_READY,
+        **counts(),
+    }
+
+
+@app.get("/queue")
+async def queue_view():
+    """Lobby view (ComfyUI /queue precedent): global counts, no params."""
+    return {"model": "Qwen-Image-2.1", **counts()}
 
 
 class GenerateRequest(BaseModel):
@@ -564,10 +830,9 @@ class GenerateRequest(BaseModel):
     height: int = Field(default=1024, ge=64, le=2048)
     steps: int = Field(default=20, ge=1, le=MAX_STEPS)
     cfg: float = Field(default=1.0, ge=1.0, le=8.0,
-                       description="true_cfg_scale; 1.0 is the model's documented "
-                                   "default and is IGNORED-style guidance-free sampling. "
-                                   "Above 1.0 makes the DiT run twice per step (2x cost).")
-    seed: int = Field(default=-1, description="-1 = random")
+                       description="true_cfg_scale; 1.0 is the model's default. "
+                                   "Above 1.0 runs the DiT twice per step (2x cost).")
+    seed: int = Field(default=-1, description="-1 = random (resolved at submit, returned in status)")
     negative_prompt: str = Field(default="",
                                  description="only used when cfg > 1 — the pipeline "
                                              "ignores it at true_cfg_scale=1")
@@ -577,154 +842,222 @@ class GenerateRequest(BaseModel):
                                    "edits degrade (text exact-match 95% -> 75%).")
 
 
-async def require_token(authorization: str = Header(default="")) -> None:
-    """Bearer-token gate. 401 with WWW-Authenticate, per the HTTP spec."""
-    if not TOKEN:
-        raise HTTPException(500, "QI21_API_KEY is not set on the server")
-    expected = f"Bearer {TOKEN}"
-    # constant-time compare: this key is a shared secret and the endpoint is public
-    if len(authorization) != len(expected) or not _consteq(authorization, expected):
-        raise HTTPException(401, "bad or missing bearer token",
-                            headers={"WWW-Authenticate": "Bearer"})
+def _resolve_params(req: GenerateRequest) -> dict:
+    if req.width * req.height > MAX_PIXELS:
+        raise HTTPException(400, f"too many pixels: cap is {MAX_PIXELS}")
+    if req.fast and not FAST_READY:
+        raise HTTPException(503, "fast mode unavailable — the Turbo8 LoRA did not load at boot")
+    steps = 8 if req.fast else req.steps
+    cfg = 1.0 if req.fast else req.cfg
+    seed = req.seed if req.seed >= 0 else secrets.randbits(31)
+    negative = req.negative_prompt if (req.negative_prompt and cfg > 1.0) else ""
+    # negative_prompt is a silent no-op at cfg=1 per the diffusers docs — the
+    # API drops it rather than pretending it was used.
+    return {"prompt": req.prompt, "width": req.width, "height": req.height,
+            "steps": steps, "cfg": cfg, "seed": seed,
+            "negative_prompt": negative, "fast": bool(req.fast)}
 
 
-def _consteq(a: str, b: str) -> bool:
-    acc = 0
-    for x, y in zip(a.encode(), b.encode()):
-        acc |= x ^ y
-    return acc == 0
-
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok" if PIPE is not None else "loading",
-        "model": "Qwen-Image-2.1",
-        "dtype": "bfloat16",
-        "resident_gib": round(torch.cuda.memory_allocated() / 2**30, 1) if torch.cuda.is_available() else None,
-        "uptime_s": round(time.time() - BOOT_T, 1),
-        "busy": GPU_LOCK.locked(),
-        "fast_ready": FAST_READY,
-    }
+def _envelope(job_id: str, pos: int) -> JSONResponse:
+    return JSONResponse(status_code=202, content={
+        "job_id": job_id,
+        "status": "queued",
+        "queue_position": pos,                      # 0-based, fal-style
+        "status_url": f"/jobs/{job_id}",
+        "result_url": f"/jobs/{job_id}/result",
+        "cancel_url": f"/jobs/{job_id}/cancel",
+    })
 
 
 @app.post("/generate", dependencies=[Depends(require_token)])
-@app.post("/v1/images/generations", dependencies=[Depends(require_token)])
 async def generate(req: GenerateRequest):
-    if PIPE is None:
-        raise HTTPException(503, "model still loading")
+    """Submit and return immediately. Never rejects for capacity — the queue
+    is unbounded; the render happens when a worker frees up."""
+    params = _resolve_params(req)
+    job_id, pos = submit_job(params)
+    return _envelope(job_id, pos)
 
-    if req.width * req.height > MAX_PIXELS:
-        raise HTTPException(400, f"too many pixels: cap is {MAX_PIXELS}")
 
-    fast = bool(req.fast)
-    if fast and not FAST_READY:
-        raise HTTPException(503, "fast mode unavailable — the Turbo8 LoRA did not load at boot")
+def _wait_done(job_id: str) -> bool:
+    deadline = time.time() + SYNC_WAIT_S
+    while time.time() < deadline:
+        row = job_row(job_id)
+        if row is not None and row["state"] in ("done", "error", "canceled"):
+            return True
+        time.sleep(0.4)
+    return False
 
-    seed = req.seed if req.seed >= 0 else int(torch.Generator("cuda").initial_seed())
-    gen = torch.Generator("cuda").manual_seed(seed)
 
-    # Wait politely, but do not queue without bound — see design note 2.
-    try:
-        await asyncio.wait_for(GPU_LOCK.acquire(), timeout=float(os.environ.get("QI21_QUEUE_S", "5")))
-    except asyncio.TimeoutError:
-        return JSONResponse(
-            status_code=429,
-            content={"error": "busy — another generation is running",
-                     "retry_after_s": int(os.environ.get("QI21_QUEUE_S", "5"))},
-            headers={"Retry-After": os.environ.get("QI21_QUEUE_S", "5")},
-        )
-
-    steps = 8 if fast else req.steps   # Turbo8 is distilled for exactly 8
-    cfg = 1.0 if fast else req.cfg     # distilled cards are guidance-free
-    try:
-        t0 = time.time()
-        kwargs = dict(
-            prompt=req.prompt,
-            width=req.width,
-            height=req.height,
-            num_inference_steps=steps,
-            true_cfg_scale=cfg,
-            generator=gen,
-            # Pinned explicitly, not left to the default. The docs warn that
-            # toggling this "does not reproduce the same image bit-for-bit in
-            # reduced precision" — a 1-ULP difference at block 1 gets amplified
-            # through 32 blocks and every step. Pinning it means a given
-            # (prompt, seed, steps) gives a reproducible image instead of one
-            # that drifts with library defaults.
-            use_kv_cache=True,
-        )
-        # Two traps, both from the diffusers docs for this pipeline:
-        #  - the kwarg is `true_cfg_scale`; there is NO `guidance_scale` on
-        #    QwenImage21Pipeline, passing one raises TypeError.
-        #  - "negative_prompt ... Ignored when true_cfg_scale is not greater
-        #    than 1." Since the default is 1.0, forwarding a negative prompt
-        #    at the default is a silent no-op. Only send it when cfg > 1.
-        if req.negative_prompt and cfg > 1.0:
-            kwargs["negative_prompt"] = req.negative_prompt
-        if fast:
-            # The stock scheduler config wrecks few-step schedules — Turbo8's
-            # card requires a scheduler with shift_terminal unset. Swap under
-            # the lock, restore after, so base requests are untouched.
-            PIPE.scheduler = FAST_SCHEDULER
-        # The blocking CUDA call has to leave the event loop alone, or the
-        # health endpoint stops answering while a render is in flight.
-        image = await asyncio.to_thread(lambda: PIPE(**kwargs).images[0])
-        dt = time.time() - t0
-    finally:
-        if fast:
-            PIPE.scheduler = BASE_SCHEDULER
-        GPU_LOCK.release()
-
-    # PNG + base64 run OUTSIDE the lock (compress_level=1: this is transport
-    # encoding, not archival). Previously this sat inside the lock, so every
-    # queued request waited for the previous request's PNG encode — up to
-    # 0.1-0.3 s of pure stall per request with the GPU idle (found by the
-    # speed-research pass, 2026-10-06).
-    buf = io.BytesIO()
-    image.save(buf, format="PNG", compress_level=1)
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-
-    # Response shape is the OpenAI /v1/images/generations one — DALL·E-shaped:
-    #   {"created": <epoch>, "data": [{"b64_json": ..., "url": null, ...}]}
-    # vLLM-Omni serves Qwen-Image-2.1 at exactly this shape and its docs drive
-    # it through the OpenAI Python SDK (client.images.generate), so matching it
-    # means a real SDK client works against this server unmodified instead of
-    # needing a shim. The extra keys after "data" are additions, not
-    # replacements — an OpenAI client ignores unknown fields, and they are what
-    # cell 6c and you read for timing. (Note: vLLM-Omni's own Qwen-Image-2.1
-    # support is unmerged and was verified only on GB300 — we match the
-    # CONVENTION, we are not standing on that implementation.)
+def _openai_shape(row) -> dict:
+    meta = json.loads(row["error"]) if row["error"] else {}
+    with open(row["result_path"], "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode("ascii")
     return {
-        "created": int(time.time()),
+        "created": int(row["finished_at"] or time.time()),
         "data": [{"b64_json": b64, "url": None, "revised_prompt": None}],
-        # --- non-OpenAI extras, additive ---
-        "seed": seed,
-        "width": req.width,
-        "height": req.height,
-        "steps": steps,
-        "seconds": round(dt, 2),
-        "seconds_per_step": round(dt / steps, 3),
-        "fast": fast,
+        "seed": meta.get("seed"), "width": meta.get("width"),
+        "height": meta.get("height"), "steps": meta.get("steps"),
+        "seconds": meta.get("seconds"), "seconds_per_step": meta.get("seconds_per_step"),
+        "fast": meta.get("fast", False),
+        "job_id": row["job_id"],
     }
 
 
+@app.post("/v1/images/generations", dependencies=[Depends(require_token)])
+async def generate_openai(req: GenerateRequest):
+    """OpenAI-shaped clients need a synchronous body. Submit, wait up to
+    QI21_SYNC_WAIT_S, answer with the OpenAI shape — or the 202 envelope if the
+    queue is deeper than the wait. The queue can delay, never reject."""
+    params = _resolve_params(req)
+    job_id, pos = submit_job(params)
+    done = await asyncio.to_thread(_wait_done, job_id)
+    if not done:
+        return _envelope(job_id, queue_position(job_id) if queue_position(job_id) is not None else pos)
+    row = job_row(job_id)
+    if row["state"] == "error":
+        return JSONResponse(status_code=500, content={"error": row["error"]})
+    if row["state"] == "canceled":
+        return JSONResponse(status_code=400, content={"error": "canceled"})
+    return _openai_shape(row)
+
+
+def _job_status(row) -> dict:
+    meta = json.loads(row["error"]) if (row["state"] == "done" and row["error"]) else {}
+    out = {
+        "job_id": row["job_id"],
+        "status": row["state"],
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "error": row["error"] if row["state"] == "error" else None,
+        "result_url": f"/jobs/{row['job_id']}/result" if row["state"] == "done" else None,
+        "result": meta if row["state"] == "done" else None,
+    }
+    if row["state"] == "queued":
+        with db() as c:
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM jobs WHERE state='queued' AND seq<?",
+                (row["seq"],),
+            ).fetchone()["n"]
+        out["queue_position"] = n  # 0-based; the UI displays n+1
+    return out
+
+
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_token)])
+async def job_status(job_id: str):
+    row = job_row(job_id)
+    if row is None:
+        raise HTTPException(404, "unknown job id")
+    return _job_status(row)
+
+
+@app.get("/jobs/{job_id}/result", dependencies=[Depends(require_token)])
+async def job_result(job_id: str):
+    row = job_row(job_id)
+    if row is None:
+        raise HTTPException(404, "unknown job id")
+    if row["state"] != "done" or not row["result_path"]:
+        raise HTTPException(409, f"job is {row['state']}, no result yet")
+    if not pathlib.Path(row["result_path"]).exists():
+        raise HTTPException(410, "result expired")
+    return FileResponse(row["result_path"], media_type="image/png",
+                        filename=f"qwen21_{job_id}.png")
+
+
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_token)])
+async def job_cancel(job_id: str):
+    with db() as c:
+        cur = c.execute(
+            "UPDATE jobs SET state='canceled',finished_at=? WHERE job_id=? AND state='queued'",
+            (time.time(), job_id),
+        )
+    if cur.rowcount:
+        return {"job_id": job_id, "status": "canceled"}
+    raise HTTPException(409, "cancel only works before rendering starts")
+
+
+# ---------------------------------------------------------------- dispatcher
+def _render_sync(params: dict, job_id: str):
+    """Runs in a worker thread while GPU_LOCK is held. Returns (png_path, meta)."""
+    t0 = time.time()
+    kwargs = dict(
+        prompt=params["prompt"], width=params["width"], height=params["height"],
+        num_inference_steps=params["steps"], true_cfg_scale=params["cfg"],
+        generator=torch.Generator("cuda").manual_seed(params["seed"]),
+        # Pinned: toggling this does not reproduce images bit-for-bit in
+        # reduced precision — pin it so a given (prompt, seed, steps) is
+        # reproducible across the fleet.
+        use_kv_cache=True,
+    )
+    if params.get("negative_prompt"):
+        kwargs["negative_prompt"] = params["negative_prompt"]
+    fast = bool(params.get("fast"))
+    if fast:
+        PIPE.scheduler = FAST_SCHEDULER
+    try:
+        image = PIPE(**kwargs).images[0]
+    finally:
+        if fast:
+            PIPE.scheduler = BASE_SCHEDULER
+    dt = time.time() - t0
+    meta = {"seed": params["seed"], "width": params["width"], "height": params["height"],
+            "steps": params["steps"], "seconds": round(dt, 2),
+            "seconds_per_step": round(dt / params["steps"], 3), "fast": fast}
+    # PNG encoding (compress_level=1: transport, not archival) happens after
+    # timing was taken, so `seconds` stays an honest GPU number.
+    out = RESULTS / f"{job_id}.png"
+    image.save(out, format="PNG", compress_level=1)
+    return out, meta
+
+
+async def dispatcher():
+    me = WORKER_ID
+    i = 0
+    row = None
+    print(f"dispatcher {me} up — claiming jobs", flush=True)
+    while True:
+        try:
+            row = claim_next(me)
+            if row is None:
+                if i % 400 == 0:
+                    sweep()  # ~every 100s of idle time
+                await asyncio.sleep(0.25)
+            else:
+                params = json.loads(row["params"])
+                print(f"[{me}] rendering {row['job_id']} "
+                      f"({params['width']}x{params['height']} x{params['steps']}"
+                      f"{' fast' if params.get('fast') else ''})", flush=True)
+                async with GPU_LOCK:
+                    path, meta = await asyncio.to_thread(_render_sync, params, row["job_id"])
+                finish_job(row["job_id"], str(path), meta)
+                print(f"[{me}] done {row['job_id']} in {meta['seconds']}s", flush=True)
+        except Exception as exc:  # noqa: BLE001 — a failed job must not kill dispatch
+            try:
+                if row is not None:
+                    fail_job(row["job_id"], f"{type(exc).__name__}: {exc}")
+            except Exception:
+                pass
+            print(f"dispatcher error: {type(exc).__name__}: {exc}", flush=True)
+            await asyncio.sleep(1)
+        i += 1
+
+
+# ---------------------------------------------------------------- startup
 def load() -> None:
-    """Load the pipeline. Called before uvicorn starts so /health is honest."""
+    """Load the pipeline. Runs in each worker's startup hook."""
     global PIPE, BASE_SCHEDULER, FAST_SCHEDULER, FAST_READY
     from diffusers import QwenImage21Pipeline
 
     print(f"loading {WORK} -> cuda (bfloat16, no offload)", flush=True)
     t0 = time.time()
-    PIPE = QwenImage21Pipeline.from_pretrained(str(WORK), torch_dtype=torch.bfloat16).to("cuda")
+    PIPE = QwenImage21Pipeline.from_pretrained(str(WORK), dtype=torch.bfloat16).to("cuda")
     BASE_SCHEDULER = PIPE.scheduler
     gib = torch.cuda.memory_allocated() / 2**30
     print(f"MODEL_READY in {time.time()-t0:.1f}s — {gib:.1f} GiB resident", flush=True)
 
     # Fast lane: Turbo8 (r128, 8 steps, T2I + editing + RGBA + up to 2K).
-    # Requirements are from its model card and are not negotiable: the LoRA,
-    # and a scheduler with shift_terminal unset. Kept strictly opt-in — base
-    # quality stays the default for every request that does not ask for it.
+    # Requirements from its model card, not negotiable: the LoRA plus a
+    # scheduler with shift_terminal unset. Strictly opt-in; base stays default.
     try:
         PIPE.load_lora_weights(
             "chriswritescode/Turbo8-LoRA-Qwen-Image-2.1",
@@ -739,14 +1072,29 @@ def load() -> None:
         print(f"!! Turbo8 fast lane failed ({type(exc).__name__}: {exc}) — base only", flush=True)
 
 
+@asynccontextmanager
+async def lifespan(_app):
+    global BOOT_T
+    BOOT_T = time.time()
+    if not TOKEN:
+        raise RuntimeError("QI21_API_KEY is not set — refusing to serve unauthenticated")
+    init_db()
+    await asyncio.to_thread(load)
+    task = asyncio.create_task(dispatcher())
+    yield
+    task.cancel()
+
+
+app.router.lifespan_context = lifespan
+
+
 if __name__ == "__main__":
     import uvicorn
 
     if not torch.cuda.is_available():
         raise SystemExit("!! no CUDA — this server needs the GPU Studio")
-    if not TOKEN:
-        raise SystemExit("!! QI21_API_KEY is not set — refusing to serve unauthenticated")
-    load()
-    # ONE worker on purpose. The lock above is per-process; more workers would
-    # each load their own 33.1 GB copy and defeat both the lock and the VRAM.
-    uvicorn.run(app, host="0.0.0.0", port=PORT, workers=1, log_level="info")
+    # Import-string form is REQUIRED for workers>1: uvicorn spawns worker
+    # processes that import this module and run the lifespan above, so every
+    # worker gets its own pipeline and its own dispatcher.
+    print(f"uvicorn up: {WORKERS} workers, queue=sqlite-wal, sync wait {SYNC_WAIT_S}s", flush=True)
+    uvicorn.run("qi21_server:app", host="0.0.0.0", port=PORT, workers=WORKERS, log_level="warning")
