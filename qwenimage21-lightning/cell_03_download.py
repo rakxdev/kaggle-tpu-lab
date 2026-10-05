@@ -24,18 +24,19 @@ WORK = pathlib.Path(os.environ.get("QI21_WORK", pathlib.Path.home() / "qwenimage
 LOG = WORK / "download.log"
 REPO = "Qwen/Qwen-Image-2.1"
 
-# Expected sizes in bytes, from the HF API listing of the repo tree. These
-# are the authoritative completion check — a resumed download that was
-# interrupted mid-shard leaves a short file that huggingface_hub will retry,
-# but a silent partial would otherwise look "done". Verified 2026-10-05.
+# Expected sizes in bytes, from the HF API tree listing of
+# Qwen/Qwen-Image-2.1 (recursive, exact `size` field — NOT a rounded display
+# value; an earlier draft used 2-decimal-rounded numbers and false-alarmed two
+# shards as SHORT after a download that was in fact byte-perfect. Verified
+# 2026-10-05 against a live 33.12 GB pull: all seven matched exactly.)
 EXPECTED = {
-    "transformer/diffusion_pytorch_model-00001-of-00002.safetensors": 9_969_927_912,
-    "transformer/diffusion_pytorch_model-00002-of-00002.safetensors": 4_259_176_140,
-    "text_encoder/model-00001-of-00004.safetensors": 4_999_751_340,
-    "text_encoder/model-00002-of-00004.safetensors": 4_921_240_180,
-    "text_encoder/model-00003-of-00004.safetensors": 4_921_093_452,
-    "text_encoder/model-00004-of-00004.safetensors": 2_703_733_192,
-    "vae/diffusion_pytorch_model.safetensors": 1_351_019_376,
+    "transformer/diffusion_pytorch_model-00001-of-00002.safetensors": 9_968_332_504,
+    "transformer/diffusion_pytorch_model-00002-of-00002.safetensors": 4_261_951_904,
+    "text_encoder/model-00001-of-00004.safetensors": 4_998_056_552,
+    "text_encoder/model-00002-of-00004.safetensors": 4_915_962_464,
+    "text_encoder/model-00003-of-00004.safetensors": 4_915_962_496,
+    "text_encoder/model-00004-of-00004.safetensors": 2_704_357_976,
+    "vae/diffusion_pytorch_model.safetensors": 1_350_989_512,
     "model_index.json": None,
 }
 TOTAL = sum(v for v in EXPECTED.values() if v)

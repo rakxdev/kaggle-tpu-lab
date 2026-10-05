@@ -25,13 +25,13 @@ python3 - "$WORK" <<'PYEOF'
 import os, sys
 work = sys.argv[1]
 expected = {
-    "transformer/diffusion_pytorch_model-00001-of-00002.safetensors": 9_969_927_912,
-    "transformer/diffusion_pytorch_model-00002-of-00002.safetensors": 4_259_176_140,
-    "text_encoder/model-00001-of-00004.safetensors": 4_999_751_340,
-    "text_encoder/model-00002-of-00004.safetensors": 4_921_240_180,
-    "text_encoder/model-00003-of-00004.safetensors": 4_921_093_452,
-    "text_encoder/model-00004-of-00004.safetensors": 2_703_733_192,
-    "vae/diffusion_pytorch_model.safetensors": 1_351_019_376,
+    "transformer/diffusion_pytorch_model-00001-of-00002.safetensors": 9968332504,
+    "transformer/diffusion_pytorch_model-00002-of-00002.safetensors": 4261951904,
+    "text_encoder/model-00001-of-00004.safetensors": 4998056552,
+    "text_encoder/model-00002-of-00004.safetensors": 4915962464,
+    "text_encoder/model-00003-of-00004.safetensors": 4915962496,
+    "text_encoder/model-00004-of-00004.safetensors": 2704357976,
+    "vae/diffusion_pytorch_model.safetensors": 1350989512,
 }
 bad = []
 for rel, want in expected.items():

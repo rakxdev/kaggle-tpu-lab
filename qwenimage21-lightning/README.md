@@ -11,21 +11,23 @@ weights survive restarts and you never download them twice.
 
 | Setting | Value | Why |
 |---|---|---|
-| Machine | **RTX PRO 6000 96GB** | 33.1 GB of weights fit natively — no quant, no offload |
-| Interruptible | **OFF** | 50–80% cheaper, but a reclaim mid-benchmark loses the run |
-| Duration | 4 hours | hard cap on the Studio's life; ~$13 of the $30 credit |
-| Cost | ~$3.26/h | Interruptible is $2.89/h; A100-80GB was $2.71/h |
+| Machine | **H200 141GB** | 33.1 GB of weights fit natively — no quant, no offload; ~3× the memory bandwidth of the RTX 6000 class and sm_90 is battle-tested in torch |
+| Interruptible | **ON** | cheap; downloads resume and cells re-run, so a reclaim costs minutes |
+| Duration | 4 hours | hard cap on the Studio's life; ~$15.28 at $3.82/h of the $30 credit |
+| Cost | ~$3.82/h (Interruptible ON) | the active price at Confirm time is the one you pay |
 
-The card is Blackwell, **compute capability 12.0 (sm_120)**, with native FP8
-(2 PFLOPS) and FP4 (4 PFLOPS) tensor cores. One caveat worth knowing: early
-driver/firmware combos reported sm_122 and hard-failed inside torch, so treat
-cell 1's `compute_cap` print as the real check rather than trusting the
-product name. (And note the corollary in "Gotchas": the diffusers pipeline has
-no FP8 path anyway.)
+Chosen over the RTX PRO 6000 96GB ($3.26/h) for its 1-minute wait and HBM
+bandwidth; chosen over the B200 ($9.86/h) because a 4-hour session there costs
+$39.44 — more than the entire credit. Any card ≥48 GB runs this kit unchanged:
+cell 1 prints the real card and compute capability, and nothing downstream
+assumes a particular arch. (The original RTX-6000-vs-A100 note about native
+FP8 turned out to be moot — the diffusers pipeline has no FP8 path for anyone.)
 
-**Why not the A100 80GB at $2.71/h?** It saves $0.72 over 4 hours and gives up
-80 GB vs 96 GB of VRAM — genuinely tight once 33.1 GB of weights plus
-activations are live at 2K — and Ampere has no native FP8. Not worth it.
+**Run on the live Studio (2026-10-05, H200):** card confirmed `9.0, 143771 MiB`,
+torch 2.14.1+cu130, bf16 matmul finite, and the full 33.12 GB checkpoint
+pulled and **byte-exact-verified against all seven shards**. The download took
+**43 seconds** (Xet high-performance transfer) — the "$0.30-0.50 of download
+time" estimate below is pessimistic on this platform by roughly 100×.
 
 Two billing facts shape every decision here:
 
@@ -64,6 +66,21 @@ offers only `[bfloat16, float32]` anyway.
 0.112 — and it is the T4-compatible one. Not needed on this card.
 
 ## Cells (run in order, one at a time)
+
+**First, the venv.** The base Studio image is PEP 668 externally-managed (pip
+refuses system installs), ships **no torch and no conda** — but does ship `uv`.
+Cell 2 builds `~/qwenimage21/venv` and installs into it. Prefix every later
+cell with:
+
+```sh
+export PATH="$HOME/qwenimage21/venv/bin:$PATH"
+```
+
+Dependencies that are NOT optional, both discovered live: **torchvision**
+(the checkpoint's Qwen3VL video processor import-raises without it, even for
+pure text-to-image) and **python3.12-dev** (Triton JIT-compiles its CUDA
+driver wrapper against `Python.h` on first CUDA launch; the header is missing
+from the image). Cell 2 handles both.
 
 | Cell | File | Job | Cost |
 |---|---|---|---|
