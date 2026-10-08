@@ -20,15 +20,31 @@ MARKER = "libcudart.so.13"
 
 
 def cu13_dirs():
-    """Every site-packages/nvidia/cu13/lib that actually holds the CUDA-13 runtime."""
+    """Every library directory that actually holds CUDA-13 runtime libraries."""
     out, seen = [], set()
+    candidates = []
     for entry in sys.path:
         if not entry or not os.path.isdir(entry):
             continue
-        for d in sorted(glob.glob(os.path.join(entry, "nvidia", "cu13", "lib"))):
-            if d not in seen and os.path.exists(os.path.join(d, MARKER)):
-                seen.add(d)
-                out.append(d)
+        candidates.extend(glob.glob(os.path.join(entry, "nvidia", "*", "lib")))
+        candidates.extend(glob.glob(os.path.join(entry, "nvidia", "cu13", "lib")))
+        candidates.extend(glob.glob(os.path.join(entry, "torch", "lib")))
+
+    # Also check dist-packages and site-packages explicitly
+    candidates.extend(glob.glob("/usr/local/lib/python*/dist-packages/nvidia/*/lib"))
+    candidates.extend(glob.glob("/usr/local/lib/python*/site-packages/nvidia/*/lib"))
+    candidates.extend(glob.glob("/usr/local/cuda*/lib64"))
+    candidates.extend(glob.glob("/usr/local/cuda*/targets/x86_64-linux/lib"))
+
+    for d in sorted(candidates):
+        if d not in seen and os.path.isdir(d):
+            try:
+                files = os.listdir(d)
+                if any(f.startswith("libcudart.so") or f.startswith("libnvrtc.so") for f in files):
+                    seen.add(d)
+                    out.append(d)
+            except OSError:
+                pass
     return out
 
 

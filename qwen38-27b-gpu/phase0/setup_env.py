@@ -127,7 +127,10 @@ def main():
     sh('pip install -q -U "transformers>=5.8.0" "huggingface_hub" hf_transfer '
        "safetensors")
 
-    # 4. import probe: torch sees 2 GPUs, CUDA initializes for real, vllm imports
+    # 4. Now that packages are installed, ensure CUDA-13 lib dirs are on LD_LIBRARY_PATH
+    cu_env.reexec()
+
+    # 5. import probe: torch sees 2 GPUs, CUDA initializes for real, vllm imports
     import torch  # noqa: E402
     import vllm  # noqa: E402,F401
     assert torch.cuda.is_available() and torch.cuda.device_count() == 2, \
