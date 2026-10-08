@@ -82,8 +82,14 @@ cat > "$BUILD_SCRIPT" <<EOF
 #!/bin/sh
 cd "$WORK/llama.cpp-escha" || { echo "cd failed"; exit 1; }
 echo "[do_build] started at \$(date)"
-echo "[do_build] cmake configure (arch 75)..."
+# Containers have libcuda.so.1 injected by driver but often lack the .so dev symlink
+[ -f /usr/lib/x86_64-linux-gnu/libcuda.so.1 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libcuda.so ] \
+  && ln -sf libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so 2>/dev/null
+# Wipe any stale failed configure cache
+rm -rf build
+echo "[do_build] cmake configure (arch 75, no-vmm)..."
 cmake -B build $GEN -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 \
+      -DGGML_CUDA_NO_VMM=ON \
       -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release \
   && echo "[do_build] cmake build targets..." \
   && cmake --build build -j\$(nproc) \
