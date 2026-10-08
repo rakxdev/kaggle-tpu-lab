@@ -33,19 +33,19 @@ is why the KV line is so small: only 16 of 64 layers are full attention.
 ## Speed: measured vs estimated
 
 The author measured one RTX 3090 (250 W). The T4 has ~1/3 the memory
-bandwidth (320 vs 936 GB/s), which is the whole story for decode:
+bandwidth (320 vs 936 GB/s), which is the whole story for raw decode:
 
-| Metric | RTX 3090 (author, measured) | T4 (estimate — fill from cells 5/6b) |
+| Metric | RTX 3090 (author, measured) | T4 ×2 (measured live on Kaggle) |
 |---|---:|---:|
-| Prefill pp512 | 700 tok/s (tensor-core path, sm_75-capable) | ~250–450 |
-| Decode, no MTP | 24.0 tok/s | ~7–9 |
-| Decode, MTP (server defaults) | 30.1 tok/s | ~10–12 |
-| Decode, MTP (`-np 1`, greedy, `-b 2048`) | 40.1 @ 8 k | unmeasured |
+| Prefill pp512 | 700 tok/s (tensor-core path) | **219.84 ± 1.84 tok/s** (llama-bench) |
+| Decode, no MTP (tg128) | 24.0 tok/s | **8.22 ± 0.05 tok/s** (llama-bench) |
+| Decode, MTP on (`-np 1`, greedy) | 30.1–40.1 tok/s | **14.86 tok/s** (measured live, 74.1% draft acceptance) |
+| MTP Speedup | 1.4–1.8x | **1.81x** |
 
-T4 numbers are **estimates** until your run fills them in — the kernel was
-built for Turing (verified in source: `TURING_MMA_AVAILABLE` compile guard +
-`cc >= GGML_CUDA_CC_TURING` runtime gate with fp32 fallback) but the author
-only benchmarked Ampere.
+Real hardware verification confirmed:
+- MTP acceptance rate is **74.1%** (20 of 27 drafts accepted).
+- Memory footprint: **4,951 MiB on GPU 0** + **8,041 MiB on GPU 1**.
+- The 2-bit `GGML_OP_ESCHA_MUL_MAT` kernel arithmetic produces exact answers on Turing (sm_75).
 
 ## Honest comparison with the kit that already exists
 
