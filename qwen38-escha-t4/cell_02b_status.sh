@@ -7,7 +7,17 @@
 WORK=/kaggle/tmp/escha
 LOG="$WORK/build.log"
 
-if [ ! -f "$LOG" ]; then echo "no build log — run cell_02_setup.sh first"; exit 1; fi
+# Give the log file a few seconds to appear if cell_02b is clicked right after cell_02
+for i in 1 2 3 4 5; do
+  [ -f "$LOG" ] && break
+  sleep 1
+done
+
+if [ ! -f "$LOG" ]; then
+  echo "no build log yet at $LOG"
+  echo "running build processes: $(pgrep -f 'do_build\|cmake' || echo 'none')"
+  exit 1
+fi
 
 if grep -q BUILD_OK "$LOG"; then
   echo "== BUILD_OK =="

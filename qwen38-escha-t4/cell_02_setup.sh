@@ -70,16 +70,36 @@ sleep 3; tail -1 /kaggle/working/heartbeat.log
 echo ""
 echo "== 4. configure + build (background, log: $WORK/build.log) =="
 # Kill and relaunch are separate commands (HANDOFF rule).
+pkill -f "do_build.sh" 2>/dev/null
 pkill -f "cmake --build" 2>/dev/null
 sleep 1
+
 GEN=""
 command -v ninja > /dev/null 2>&1 && GEN="-G Ninja"   # ninja: ~2x faster build
-nohup sh -c "
-  cd $WORK/llama.cpp-escha || exit 1
-  cmake -B build $GEN -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 \
-        -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release > $WORK/build.log 2>&1 \
+
+BUILD_SCRIPT="$WORK/do_build.sh"
+cat > "$BUILD_SCRIPT" <<EOF
+#!/bin/sh
+cd "$WORK/llama.cpp-escha" || { echo "cd failed"; exit 1; }
+echo "[do_build] started at \$(date)"
+echo "[do_build] cmake configure (arch 75)..."
+cmake -B build $GEN -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 \
+      -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release \
+  && echo "[do_build] cmake build targets..." \
   && cmake --build build -j\$(nproc) \
-        --target llama-server llama-cli llama-bench >> $WORK/build.log 2>&1 \
-  && echo BUILD_OK >> $WORK/build.log || echo BUILD_FAILED >> $WORK/build.log
-" > /dev/null 2>&1 &
-echo "BUILD_RUNNING — poll with cell_02b_status.sh (llama.cpp CUDA on 4 vCPUs: ~10-25 min with ninja)"
+        --target llama-server llama-cli llama-bench \
+  && echo BUILD_OK || echo BUILD_FAILED
+EOF
+chmod +x "$BUILD_SCRIPT"
+
+# setsid detaches from IPython's process group so cell termination cannot
+# kill the background compile. Direct stdout/stderr redirection guarantees
+# $WORK/build.log is opened on disk immediately at launch.
+LOG="$WORK/build.log"
+setsid nohup "$BUILD_SCRIPT" > "$LOG" 2>&1 < /dev/null &
+echo "BUILD_RUNNING pid $! — log $LOG"
+sleep 5
+echo "--- initial build log tail ---"
+tail -8 "$LOG" 2>/dev/null || echo "(log file opening...)"
+echo ""
+echo "poll with cell_02b_status.sh (llama.cpp CUDA on 4 vCPUs: ~10-25 min with ninja)"
