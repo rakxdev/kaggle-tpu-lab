@@ -40,8 +40,9 @@ time.sleep(3)
 # pinned to the second T4 so GPU0 keeps all its headroom for KV + state.
 CMD = [
     SRV, "-m", MAIN, "-md", DRAFT,
-    "--spec-type", "draft-mtp", "--spec-draft-n-max", "3",
-    "-ngl", "999", "--spec-draft-device", "CUDA1", "--spec-draft-ngl", "999",
+    "--spec-type", "draft-mtp", "--spec-draft-n-max", "4",
+    "--device", "CUDA0", "-ngl", "999",
+    "--spec-draft-device", "CUDA1", "--spec-draft-ngl", "999",
     "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0",
     "-c", str(CTX), "-np", "1", "-b", "2048", "-ub", "2048",
     "--temp", "0", "--top-k", "1", "--jinja",
