@@ -68,8 +68,10 @@ load, longest context on one card, or the 2-bit kernel itself → this kit.
 
 | Cell | Job | Quota cost |
 |---|---|---|
+| 0 | `cell_00_deps.sh` — toolchain + download stack (every session, first) | ~1 min |
+| 0b | `cell_00b_pull.sh` — **clone / clean-pull the kit repo (every session, second)** | ~0 |
 | 1 | `cell_01_report.sh` — GPU, nvcc, disk; the go/no-go facts | ~0 |
-| 2 | `cell_02_setup.sh` — clone fork, verify Turing gates in-kernel, heartbeat, start sm_75 build | ~15–30 min |
+| 2 | `cell_02_setup.sh` — clone fork, verify Turing gates in-kernel, heartbeat, start sm_75 build | ~10–25 min |
 | 2b | `cell_02b_status.sh` — poll build → `BUILD_OK` | 0 |
 | 3 | `cell_03_download.py` + `cell_03b_status.sh` — 13.2 GB, byte-verified | ~10–20 min |
 | 4 | `cell_04_smoke.py` — load + one generation on the real flag set → `ESCHA_SMOKE_OK` | ~3 min |
@@ -80,14 +82,20 @@ load, longest context on one card, or the 2-bit kernel itself → this kit.
 Every long job is background + log + a poller cell; every cell re-runs safely.
 
 ```sh
+sh cell_00_deps.sh    # every session, first
+sh cell_00b_pull.sh   # every session, second — picks up any fix I pushed
 sh cell_01_report.sh
 sh cell_02_setup.sh          # then poll 02b
 python3 cell_03_download.py  # then poll 03b
 python3 cell_04_smoke.py
 sh cell_05_bench.sh
-sh cell_06_serve.sh          # then, from your machine:
+sh cell_06_serve.sh          # then, from any machine:
 python3 cell_06b_proof.py https://<something>.trycloudflare.com <key>
 ```
+
+In a Kaggle notebook the same cells run as `!sh /kaggle/working/kaggle-tpu-lab/qwen38-escha-t4/<cell>`
+(`!python3` for the `.py` ones) — cell 0b is what turns my pushed fixes into
+your session.
 
 ## The MTP contract (two quiet speed-killers)
 
