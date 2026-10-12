@@ -52,18 +52,44 @@ echo "  linking indextts package into Python path..."
 # Remove strict python version ceiling (<3.12) from pyproject.toml
 sed -i 's/requires-python = ".*"/requires-python = ">=3.10"/' "$REPO/pyproject.toml" 2>/dev/null || true
 
-# Patch cache_utils import resilience in indextts/gpt/transformers_generation_utils.py
+# Inject compatibility shim for transformers 5.x / Python 3.13 into indextts modules
 python3 -c "
 import pathlib
-target = pathlib.Path('$REPO/indextts/gpt/transformers_generation_utils.py')
-if target.exists():
-    content = target.read_text(encoding='utf-8')
-    content = content.replace('OffloadedCache,\n', '').replace('QuantizedCacheConfig,\n', '')
-    content = content.replace('OffloadedCache,', '').replace('QuantizedCacheConfig,', '')
-    if 'class OffloadedCache:' not in content:
-        content = 'class OffloadedCache:\n    pass\nclass QuantizedCacheConfig:\n    pass\n' + content
-    target.write_text(content, encoding='utf-8')
-    print('  applied cache_utils resilience patch to indextts')
+
+shim = '''
+import torch
+try:
+    import transformers.cache_utils as _t_cu
+    if not hasattr(_t_cu, \"OffloadedCache\"):
+        class OffloadedCache: pass
+        _t_cu.OffloadedCache = OffloadedCache
+    if not hasattr(_t_cu, \"QuantizedCacheConfig\"):
+        class QuantizedCacheConfig: pass
+        _t_cu.QuantizedCacheConfig = QuantizedCacheConfig
+except Exception: pass
+
+try:
+    import transformers.pytorch_utils as _t_pu
+    if not hasattr(_t_pu, \"isin_mps_friendly\"):
+        _t_pu.isin_mps_friendly = torch.isin
+    if not hasattr(_t_pu, \"is_torch_greater_or_equal_than_1_13\"):
+        _t_pu.is_torch_greater_or_equal_than_1_13 = lambda: True
+except Exception: pass
+'''
+
+targets = [
+    'indextts/__init__.py',
+    'indextts/gpt/transformers_generation_utils.py',
+    'indextts/gpt/transformers_modeling_utils.py'
+]
+
+for t in targets:
+    f = pathlib.Path('$REPO') / t
+    if f.exists():
+        raw = f.read_text(encoding='utf-8')
+        if 'transformers.cache_utils as _t_cu' not in raw:
+            f.write_text(shim + '\n' + raw, encoding='utf-8')
+            print(f'  injected compatibility shim into {t}')
 "
 
 # Add .pth file to python site-packages to ensure direct importability
