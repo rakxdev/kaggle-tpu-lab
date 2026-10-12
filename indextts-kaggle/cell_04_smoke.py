@@ -46,16 +46,15 @@ gpu_name = torch.cuda.get_device_name(0)
 total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
 print(f"  Target Device : {device} ({gpu_name}, {total_vram:.2f} GiB total VRAM)")
 
-print("\n== 2. loading IndexTTS-2.5 engine (FP16) ==")
+print("\n== 2. loading IndexTTS-2.5 engine ==")
 cfg_path = CHECKPOINTS / "config.yaml"
 t0 = time.time()
 
 tts = IndexTTS2(
     cfg_path=str(cfg_path),
     model_dir=str(CHECKPOINTS),
-    use_fp16=True,
-    use_cuda_kernel=False,
-    use_deepspeed=False,
+    use_bf16=False,
+    device=device,
 )
 print(f"  IndexTTS-2.5 loaded in {time.time() - t0:.2f}s")
 vram_loaded = torch.cuda.memory_allocated(0) / (1024**3)
@@ -89,8 +88,8 @@ t0 = time.time()
 tts.infer(
     spk_audio_prompt=ref_audio,
     text=text_a,
-    lang="EN",
     output_path=str(OUT_NEUTRAL),
+    lang="EN",
     verbose=False,
 )
 dt_a = time.time() - t0
@@ -105,10 +104,10 @@ t0 = time.time()
 tts.infer(
     spk_audio_prompt=ref_audio,
     text=text_b,
+    output_path=str(OUT_EMOTION),
     lang="EN",
     emo_vector=emo_vector,
     emo_alpha=0.9,
-    output_path=str(OUT_EMOTION),
     verbose=False,
 )
 dt_b = time.time() - t0

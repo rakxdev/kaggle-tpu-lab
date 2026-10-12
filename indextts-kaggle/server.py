@@ -63,14 +63,13 @@ def get_engine():
         from indextts.infer_v2_5 import IndexTTS2
 
         cfg_path = CHECKPOINTS / "config.yaml"
-        print("[IndexTTS-2.5] Loading model into CUDA:0 (FP16)...")
+        print("[IndexTTS-2.5] Loading model into CUDA:0...")
         t0 = time.time()
         tts_engine = IndexTTS2(
             cfg_path=str(cfg_path),
             model_dir=str(CHECKPOINTS),
-            use_fp16=True,
-            use_cuda_kernel=False,
-            use_deepspeed=False,
+            use_bf16=False,
+            device="cuda:0",
         )
         print(f"[IndexTTS-2.5] Engine initialized in {time.time() - t0:.2f}s")
     return tts_engine
