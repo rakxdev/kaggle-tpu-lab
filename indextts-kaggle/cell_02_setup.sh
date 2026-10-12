@@ -24,7 +24,7 @@ echo "  repository ready at $REPO"
 
 echo ""
 echo "== 2. install IndexTTS runtime dependencies =="
-pip install -q --no-warn-script-location "huggingface-hub<2.0,>=1.16.0"
+pip install -q --no-warn-script-location "huggingface-hub<2.0,>=1.16.0" "transformers>=4.46.0,<=4.52.1"
 pip install -q --no-warn-script-location \
   einops \
   descript-audiotools \
@@ -51,6 +51,31 @@ pip install -q --no-warn-script-location \
 echo "  linking indextts package into Python path..."
 # Remove strict python version ceiling (<3.12) from pyproject.toml
 sed -i 's/requires-python = ".*"/requires-python = ">=3.10"/' "$REPO/pyproject.toml" 2>/dev/null || true
+
+# Patch cache_utils import resilience in case of transformers version variance
+python3 -c "
+import pathlib
+target = pathlib.Path('$REPO/indextts/gpt/transformers_generation_utils.py')
+if target.exists():
+    content = target.read_text(encoding='utf-8')
+    if 'from transformers.cache_utils import' in content:
+        # Protect OffloadedCache and QuantizedCacheConfig with safe fallback
+        content = content.replace('OffloadedCache,', '').replace('QuantizedCacheConfig,', '')
+        fallback = '''
+from transformers.cache_utils import Cache
+try:
+    from transformers.cache_utils import OffloadedCache
+except ImportError:
+    class OffloadedCache: pass
+try:
+    from transformers.cache_utils import QuantizedCacheConfig
+except ImportError:
+    class QuantizedCacheConfig: pass
+'''
+        content = fallback + '\n' + content
+        target.write_text(content, encoding='utf-8')
+        print('  applied cache_utils resilience patch to indextts')
+"
 
 # Add .pth file to python site-packages to ensure direct importability
 python3 -c "
