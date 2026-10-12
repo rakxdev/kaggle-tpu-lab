@@ -47,8 +47,24 @@ pip install -q --no-warn-script-location \
   json5 \
   textstat
 
-echo "  installing indextts package (editable)..."
-pip install -q -e "$REPO" --no-deps
+echo "  linking indextts package into Python path..."
+# Remove strict python version ceiling (<3.12) from pyproject.toml
+sed -i 's/requires-python = ".*"/requires-python = ">=3.10"/' "$REPO/pyproject.toml" 2>/dev/null || true
+
+# Add .pth file to python site-packages to ensure direct importability
+python3 -c "
+import site, pathlib
+for p in site.getsitepackages():
+    pth = pathlib.Path(p) / 'indextts.pth'
+    try:
+        pth.write_text('$REPO\n', encoding='utf-8')
+        print('  linked indextts to', pth)
+        break
+    except Exception:
+        pass
+"
+# Also install with --no-deps if possible
+pip install -q -e "$REPO" --no-deps 2>/dev/null || true
 
 echo ""
 echo "== 3. cloudflared binary =="
@@ -63,6 +79,8 @@ echo "  cloudflared: $("$CF_BIN" --version 2>/dev/null | head -1)"
 echo ""
 echo "== 4. verify IndexTTS import =="
 python3 -c "
+import sys
+sys.path.insert(0, '$REPO')
 import indextts
 from indextts.infer_v2_5 import IndexTTS2
 print('  IndexTTS2 engine imported successfully')
