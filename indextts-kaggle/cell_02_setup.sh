@@ -36,7 +36,7 @@ echo "  running uv sync (isolated Python 3.11 environment)..."
 uv sync --extra webui
 
 echo "  adding API server stack to environment..."
-uv pip install -q fastapi uvicorn soundfile pydub
+uv pip install -q fastapi uvicorn soundfile pydub hf_transfer
 
 VENV_PY="$REPO/.venv/bin/python"
 echo "  isolated environment ready: $("$VENV_PY" --version)"

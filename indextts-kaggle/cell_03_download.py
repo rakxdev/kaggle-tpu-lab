@@ -18,7 +18,11 @@ if os.path.exists(VENV_PY) and sys.executable != VENV_PY:
 import time
 from pathlib import Path
 
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+try:
+    import hf_transfer
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+except ImportError:
+    os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
 
 try:
     from huggingface_hub import snapshot_download
