@@ -65,10 +65,14 @@ with call("/v1/chat/completions", {
     ],
     "temperature": 0.0,
     "max_tokens": 128,
+    "chat_template_kwargs": {"enable_thinking": False},
 }) as r:
     data = json.load(r)
 dt = time.time() - t0
 out_text = data["choices"][0]["message"]["content"].strip()
+if "</think>" in out_text:
+    out_text = out_text.split("</think>", 1)[1].strip()
+out_text = out_text.removeprefix("<think>").strip()
 usage = data.get("usage", {})
 comp_toks = usage.get("completion_tokens", len(out_text.split()))
 rate = comp_toks / max(dt, 1e-6)
@@ -100,10 +104,14 @@ with call("/v1/chat/completions", {
     ],
     "temperature": 0.0,
     "max_tokens": 64,
+    "chat_template_kwargs": {"enable_thinking": False},
 }) as r:
     img_data = json.load(r)
 dt_img = time.time() - t0
 out_img = img_data["choices"][0]["message"]["content"].strip()
+if "</think>" in out_img:
+    out_img = out_img.split("</think>", 1)[1].strip()
+out_img = out_img.removeprefix("<think>").strip()
 print(f"    image input : synthesized PNG with 'KNOWLEDGE IS POWER'")
 print(f"    image output: {out_img!r} in {dt_img:.2f}s")
 

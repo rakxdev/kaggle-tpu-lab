@@ -64,6 +64,8 @@ nohup "$SRV" \
   -ngl 99 \
   --device CUDA0 \
   -c "$CTX" \
+  -b 2048 \
+  -ub 2048 \
   --port "$PORT" \
   --host 127.0.0.1 \
   --alias "Index-Translate-9B" \

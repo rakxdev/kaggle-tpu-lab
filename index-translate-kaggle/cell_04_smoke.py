@@ -45,9 +45,12 @@ CMD = [
     "-ngl", "99",
     "--device", "CUDA0",
     "-c", "8192",
+    "-b", "2048",
+    "-ub", "2048",
     "--host", "127.0.0.1",
     "--port", str(PORT),
     "--alias", "Index-Translate-9B",
+    "--chat-template-kwargs", '{"enable_thinking":false}',
 ]
 
 log_file = open(f"{WORK}/smoke.log", "w")
@@ -85,6 +88,7 @@ body_text = json.dumps({
     ],
     "temperature": 0.0,
     "max_tokens": 128,
+    "chat_template_kwargs": {"enable_thinking": False},
 }).encode("utf-8")
 
 req_text = urllib.request.Request(
@@ -95,11 +99,14 @@ req_text = urllib.request.Request(
 )
 
 t0 = time.time()
-with urllib.request.urlopen(req_text, timeout=30) as r:
+with urllib.request.urlopen(req_text, timeout=180) as r:
     res_text = json.load(r)
 dt_text = time.time() - t0
 
 text_out = res_text["choices"][0]["message"]["content"].strip()
+if "</think>" in text_out:
+    text_out = text_out.split("</think>", 1)[1].strip()
+text_out = text_out.removeprefix("<think>").strip()
 print(f"text input : '技术赋能创作，让交流跨越语言的界限。'")
 print(f"text output: {text_out!r} ({dt_text:.2f}s)")
 assert len(text_out) > 5, "text translation output too short"
@@ -130,6 +137,7 @@ body_img = json.dumps({
     ],
     "temperature": 0.0,
     "max_tokens": 128,
+    "chat_template_kwargs": {"enable_thinking": False},
 }).encode("utf-8")
 
 req_img = urllib.request.Request(
@@ -140,11 +148,14 @@ req_img = urllib.request.Request(
 )
 
 t0 = time.time()
-with urllib.request.urlopen(req_img, timeout=60) as r:
+with urllib.request.urlopen(req_img, timeout=180) as r:
     res_img = json.load(r)
 dt_img = time.time() - t0
 
 img_out = res_img["choices"][0]["message"]["content"].strip()
+if "</think>" in img_out:
+    img_out = img_out.split("</think>", 1)[1].strip()
+img_out = img_out.removeprefix("<think>").strip()
 print(f"image test: synthesized PNG with 'HELLO WORLD - OPEN SOURCE'")
 print(f"image output: {img_out!r} ({dt_img:.2f}s)")
 
