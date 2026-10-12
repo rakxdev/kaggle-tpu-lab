@@ -75,12 +75,39 @@ try:
     if not hasattr(_t_pu, \"is_torch_greater_or_equal_than_1_13\"):
         _t_pu.is_torch_greater_or_equal_than_1_13 = lambda: True
 except Exception: pass
+
+try:
+    import transformers.tokenization_utils as _t_tu
+    if not hasattr(_t_tu, \"ExtensionsTrie\"):
+        try:
+            from transformers.tokenization_python import ExtensionsTrie as _ET
+            _t_tu.ExtensionsTrie = _ET
+        except Exception:
+            class ExtensionsTrie: pass
+            _t_tu.ExtensionsTrie = ExtensionsTrie
+except Exception: pass
+
+try:
+    import transformers.generation.configuration_utils as _t_gcu
+    if not hasattr(_t_gcu, \"NEED_SETUP_CACHE_CLASSES_MAPPING\"):
+        _t_gcu.NEED_SETUP_CACHE_CLASSES_MAPPING = {}
+    if not hasattr(_t_gcu, \"QUANT_BACKEND_CLASSES_MAPPING\"):
+        _t_gcu.QUANT_BACKEND_CLASSES_MAPPING = {}
+except Exception: pass
+
+try:
+    import transformers.generation.candidate_generator as _t_cg
+    if not hasattr(_t_cg, \"AssistedCandidateGeneratorDifferentTokenizers\"):
+        class AssistedCandidateGeneratorDifferentTokenizers: pass
+        _t_cg.AssistedCandidateGeneratorDifferentTokenizers = AssistedCandidateGeneratorDifferentTokenizers
+except Exception: pass
 '''
 
 targets = [
     'indextts/__init__.py',
     'indextts/gpt/transformers_generation_utils.py',
-    'indextts/gpt/transformers_modeling_utils.py'
+    'indextts/gpt/transformers_modeling_utils.py',
+    'indextts/gpt/transformers_gpt2.py'
 ]
 
 for t in targets:
@@ -90,6 +117,10 @@ for t in targets:
         if 'transformers.cache_utils as _t_cu' not in raw:
             f.write_text(shim + '\n' + raw, encoding='utf-8')
             print(f'  injected compatibility shim into {t}')
+        else:
+            # Refresh shim to newest definitions
+            lines = [l for l in raw.splitlines() if not l.startswith('import transformers.') and not l.startswith('    _t_')]
+            f.write_text(shim + '\n' + raw, encoding='utf-8')
 "
 
 # Add .pth file to python site-packages to ensure direct importability
