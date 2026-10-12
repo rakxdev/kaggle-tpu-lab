@@ -97,6 +97,9 @@ def preflight():
     if len(re.findall(r"Tesla T4", out)) < 2:
         log(f"!! expected 2 T4s, nvidia-smi shows {len(re.findall(r'T4', out))}")
         raise SystemExit(1)
+    # Remove mismatched torchaudio if present (Kaggle preinstalls CUDA 12.8 torchaudio
+    # which crashes with RuntimeError when transformers imports it with CUDA 13.0 torch)
+    subprocess.run(["pip", "uninstall", "-y", "-q", "torchaudio"], capture_output=True)
 
 
 def vllm_flags(with_tools):
