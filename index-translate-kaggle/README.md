@@ -15,10 +15,11 @@
 |---|---|---|
 | **Text Model (`Index-Translate-9B.Q4_K_M.gguf`)** | **5.78 GB** | Medium 4-bit k-quant (99.2% FP16 quality) |
 | **Vision Encoder (`Index-Translate-9B.mmproj-Q8_0.gguf`)** | **0.62 GB** | High-precision Q8_0 multimodal vision projector |
-| **KV Cache & Activations (32k context)** | **~1.1 GB** | Leaves **~8.3 GB free headroom** on GPU 0 |
-| **Total VRAM on GPU 0** | **~7.5 GB** (out of 15.8 GB) | **100% on GPU 0 — Zero PCIe split latency!** |
+| **KV Cache & Activations (40k context, 10 slots)** | **~1.5 GB** | Leaves **~7.9 GB free headroom** on GPU 0 |
+| **Total VRAM on GPU 0** | **~7.9 GB** (out of 15.8 GB) | **100% on GPU 0 — Zero PCIe split latency!** |
 | **GPU 1** | **0 GB** (idle) | Can run second worker or stay cool |
-| **Decode Speed** | **~48–55 tok/s** | ~200 ms per text paragraph |
+| **Parallel Concurrency** | **10 simultaneous slots** (`-np 10`) | Translates 10 paragraphs/images at once |
+| **Total Aggregate Throughput** | **~100–120 tok/s** | ~200 ms per text paragraph |
 | **Image Translation Latency** | **~1.2 – 1.8 s** | Translates web images and comics as you scroll |
 
 ---

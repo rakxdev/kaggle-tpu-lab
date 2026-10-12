@@ -15,7 +15,8 @@ MODELS_DIR="$WORK/models"
 MAIN="$MODELS_DIR/Index-Translate-9B.Q4_K_M.gguf"
 MMPROJ="$MODELS_DIR/Index-Translate-9B.mmproj-Q8_0.gguf"
 PORT="${INDEX_PORT:-8000}"
-CTX="${INDEX_CTX:-32768}"
+PARALLEL="${INDEX_PARALLEL:-10}"
+CTX="${INDEX_CTX:-40960}"
 MAX_MIN="${INDEX_MAX_MIN:-480}"
 LOG="$WORK/server.log"
 CFLOG="$WORK/cloudflared.log"
@@ -64,6 +65,7 @@ nohup "$SRV" \
   -ngl 99 \
   --device CUDA0 \
   -c "$CTX" \
+  -np "$PARALLEL" \
   -b 2048 \
   -ub 2048 \
   --port "$PORT" \
@@ -128,6 +130,7 @@ echo "#  Public Base URL : $URL"
 echo "#  API Endpoint    : $URL/v1/chat/completions"
 echo "#  API Key         : $INDEX_API_KEY"
 echo "#  Model Name      : Index-Translate-9B"
+echo "#  Concurrency     : $PARALLEL simultaneous slots (-np $PARALLEL)"
 echo "#  Capabilities    : Text Translation + Multimodal Image Translation"
 echo "#"
 echo "#  =========================================================="
