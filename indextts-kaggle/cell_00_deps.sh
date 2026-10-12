@@ -15,7 +15,7 @@ done
 
 echo ""
 echo "== 2. python download & uv package manager =="
-pip install -q -U uv huggingface_hub hf_transfer
+pip install -q -U uv "huggingface_hub<2.0,>=1.16.0" hf_transfer
 echo "  uv and huggingface_hub ready"
 
 echo ""

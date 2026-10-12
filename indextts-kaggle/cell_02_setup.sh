@@ -24,6 +24,7 @@ echo "  repository ready at $REPO"
 
 echo ""
 echo "== 2. install IndexTTS runtime dependencies =="
+pip install -q --no-warn-script-location "huggingface-hub<2.0,>=1.16.0"
 pip install -q --no-warn-script-location \
   einops \
   descript-audiotools \
