@@ -9,6 +9,12 @@ CELL 4 — Smoke test for IndexTTS-2.5 on T4 GPU:
 
 import os
 import sys
+
+# Automatically re-exec inside the isolated uv environment if running from system python
+VENV_PY = "/kaggle/tmp/indextts/repo/.venv/bin/python"
+if os.path.exists(VENV_PY) and sys.executable != VENV_PY:
+    os.execv(VENV_PY, [VENV_PY] + sys.argv)
+
 import time
 from pathlib import Path
 

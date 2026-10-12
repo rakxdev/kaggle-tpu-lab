@@ -34,8 +34,11 @@ pkill -f "server.py.*${PORT}" 2>/dev/null
 pkill -f "[c]loudflared tunnel.*${PORT}" 2>/dev/null
 sleep 2
 
-echo "== launching IndexTTS-2.5 server (log: $LOG) =="
-nohup python3 /kaggle/working/kaggle-tpu-lab/indextts-kaggle/server.py \
+PY_BIN="/kaggle/tmp/indextts/repo/.venv/bin/python"
+[ ! -x "$PY_BIN" ] && PY_BIN="python3"
+
+echo "== launching IndexTTS-2.5 server using $PY_BIN (log: $LOG) =="
+nohup "$PY_BIN" /kaggle/working/kaggle-tpu-lab/indextts-kaggle/server.py \
   --port "$PORT" \
   --host 127.0.0.1 \
   > "$LOG" 2>&1 &
