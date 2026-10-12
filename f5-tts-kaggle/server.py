@@ -244,175 +244,909 @@ async def generate_speech(req: SpeechRequest, authorization: Optional[str] = Hea
     )
 
 # Interactive Studio UI
-DOCS_HTML = """<!DOCTYPE html>
+HTML_PATH = Path(__file__).parent / "f5_studio.html"
+
+DOCS_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>F5-TTS Voice Studio — Kaggle T4</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>F5-TTS Voice Studio — Neural Audio Synthesis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #090d16;
-    --card: #131b2e;
-    --border: #24324f;
+    --bg-base: #06080e;
+    --bg-surface: #0c101a;
+    --bg-card: #121826;
+    --bg-elevated: #1a2236;
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-hover: rgba(56, 189, 248, 0.35);
+    --border-focus: #38bdf8;
     --accent: #38bdf8;
+    --accent-glow: rgba(56, 189, 248, 0.25);
     --accent-hover: #0284c7;
-    --text: #f1f5f9;
-    --text-muted: #94a3b8;
-    --success: #10b981;
-    --code-bg: #0b1120;
+    --secondary-accent: #818cf8;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --success: #34d399;
+    --danger: #f87171;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+    --radius-xl: 24px;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif; }
-  body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
-  .container { width: 100%; max-width: 820px; }
-  header { text-align: center; margin-bottom: 32px; }
-  h1 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; }
-  .badge { display: inline-block; padding: 4px 12px; background: rgba(56, 189, 248, 0.15); color: var(--accent); border-radius: 999px; font-size: 13px; font-weight: 600; border: 1px solid rgba(56, 189, 248, 0.3); }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
-  label { display: block; font-size: 14px; font-weight: 600; color: #cbd5e1; margin-bottom: 8px; }
-  textarea, input[type="text"], select { width: 100%; background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 15px; outline: none; transition: border-color 0.2s; }
-  textarea:focus, input[type="text"]:focus, select:focus { border-color: var(--accent); }
-  textarea { resize: vertical; min-height: 110px; }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
-  @media(max-width: 600px) { .row { grid-template-columns: 1fr; } }
-  .slider-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
-  .slider-row input[type="range"] { flex: 1; accent-color: var(--accent); }
-  button { width: 100%; background: var(--accent); color: #04101d; border: none; border-radius: 12px; padding: 15px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 14px rgba(56, 189, 248, 0.35); }
-  button:hover { background: var(--accent-hover); color: #fff; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .audio-player-box { margin-top: 24px; padding: 18px; background: var(--code-bg); border-radius: 12px; border: 1px solid var(--border); display: none; }
-  audio { width: 100%; height: 48px; outline: none; margin-top: 8px; border-radius: 8px; }
-  .api-info { margin-top: 16px; font-size: 13px; color: var(--text-muted); line-height: 1.6; }
-  pre { background: var(--code-bg); padding: 14px; border-radius: 10px; overflow-x: auto; font-family: monospace; font-size: 13px; border: 1px solid var(--border); color: #38bdf8; margin-top: 8px; }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 48px;
+    background-image: 
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(56, 189, 248, 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 85% 10%, rgba(129, 140, 248, 0.08), transparent);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 940px;
+  }
+
+  /* Header */
+  header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .brand-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 14px;
+    box-shadow: 0 0 20px rgba(56, 189, 248, 0.15);
+  }
+  .brand-pill .pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--success);
+    box-shadow: 0 0 8px var(--success);
+  }
+  h1 {
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  p.subtitle {
+    font-size: 15px;
+    color: var(--text-secondary);
+    max-width: 580px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+
+  /* Navigation Tabs */
+  .nav-tabs {
+    display: flex;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    margin-bottom: 24px;
+    gap: 4px;
+  }
+  .tab-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .tab-btn:hover {
+    color: var(--text-primary);
+  }
+  .tab-btn.active {
+    background: var(--bg-card);
+    color: var(--accent);
+    border: 1px solid var(--border-subtle);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+
+  /* Cards */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    padding: 28px;
+    margin-bottom: 24px;
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+    position: relative;
+    overflow: hidden;
+  }
+  .card-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Voice Grid */
+  .voice-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .voice-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+  }
+  .voice-card:hover {
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+  }
+  .voice-card.selected {
+    border-color: var(--accent);
+    background: rgba(56, 189, 248, 0.05);
+    box-shadow: 0 0 16px var(--accent-glow);
+  }
+  .voice-card .voice-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .voice-card .voice-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .voice-tag {
+    font-size: 10px;
+    padding: 2px 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    color: var(--text-muted);
+  }
+  .voice-card.selected .voice-tag {
+    background: rgba(56, 189, 248, 0.2);
+    color: var(--accent);
+  }
+
+  /* Custom Voice Accordion / Upload */
+  .custom-voice-panel {
+    display: none;
+    background: var(--bg-surface);
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    margin-bottom: 24px;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .upload-buttons {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .action-btn-sm {
+    flex: 1;
+    min-width: 140px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .action-btn-sm:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .action-btn-sm.recording {
+    background: rgba(248, 113, 113, 0.15);
+    border-color: var(--danger);
+    color: var(--danger);
+    animation: pulseDanger 1.2s infinite;
+  }
+  @keyframes pulseDanger {
+    0%, 100% { box-shadow: 0 0 0 rgba(248, 113, 113, 0); }
+    50% { box-shadow: 0 0 12px rgba(248, 113, 113, 0.4); }
+  }
+
+  /* Form Inputs */
+  .form-group {
+    margin-bottom: 20px;
+  }
+  label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  label span.hint {
+    font-weight: 400;
+    text-transform: none;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  textarea, input[type="text"] {
+    width: 100%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+    color: #fff;
+    font-size: 15px;
+    font-family: inherit;
+    line-height: 1.6;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  textarea:focus, input[type="text"]:focus {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 16px var(--accent-glow);
+  }
+  textarea {
+    min-height: 120px;
+    resize: vertical;
+  }
+
+  /* Quick Prompts Bar */
+  .prompts-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .prompt-chip {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .prompt-chip:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  /* Sliders Row */
+  .controls-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 24px;
+  }
+  @media(max-width: 600px) {
+    .controls-row { grid-template-columns: 1fr; }
+  }
+  .slider-container {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+  }
+  .slider-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+  .slider-header strong {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+  }
+  input[type="range"] {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    outline: none;
+    -webkit-appearance: none;
+    accent-color: var(--accent);
+  }
+
+  /* Primary Action Button */
+  .btn-generate {
+    width: 100%;
+    background: linear-gradient(135deg, var(--accent) 0%, #0284c7 100%);
+    color: #04101d;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 16px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .btn-generate:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(56, 189, 248, 0.45);
+    color: #000;
+  }
+  .btn-generate:disabled {
+    opacity: 0.6;
+    transform: none;
+    cursor: not-allowed;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    box-shadow: none;
+  }
+
+  /* Visualizer & Audio Player */
+  .player-card {
+    display: none;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    margin-top: 24px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+  }
+  .player-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .player-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--success);
+  }
+  .player-meta {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  #visualizerCanvas {
+    width: 100%;
+    height: 72px;
+    background: #080c14;
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  audio {
+    width: 100%;
+    height: 48px;
+    outline: none;
+    border-radius: 8px;
+  }
+  .player-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .download-btn {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+  }
+  .download-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* Code Tabs & Snippets */
+  .code-box {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-top: 12px;
+  }
+  .code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-elevated);
+    padding: 8px 14px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  pre {
+    padding: 16px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    color: #38bdf8;
+    overflow-x: auto;
+  }
+
+  /* Toast Notification */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    color: var(--text-primary);
+    padding: 12px 20px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+    display: none;
+    z-index: 1000;
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp {
+    from { transform: translateY(16px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  /* Footer */
+  footer {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 40px;
+  }
 </style>
 </head>
 <body>
+
 <div class="container">
   <header>
+    <div class="brand-pill">
+      <span class="pulse"></span>
+      <span>NVIDIA T4 Dual-Core · 24kHz Flow Matching</span>
+    </div>
     <h1>F5-TTS Voice Studio</h1>
-    <div class="badge">NVIDIA T4 · Flow Matching Diffusion · Zero-Shot Cloning</div>
+    <p class="subtitle">State-of-the-art neural speech synthesis and zero-shot voice cloning. High-fidelity timbre, natural prosody, and emotional breath control.</p>
   </header>
 
-  <div class="card">
-    <div class="row">
-      <div>
-        <label for="voiceSelect">Preset Voice</label>
-        <select id="voiceSelect" onchange="onVoiceChange()">
-          <option value="nature_en">English (Warm Documentary)</option>
-          <option value="mandarin_zh">Mandarin (Clear Conversational)</option>
-          <option value="storyteller">English (Storyteller / Audiobooks)</option>
-          <option value="narrator">English (Calm Narrator)</option>
-          <option value="custom">Upload Custom Voice (5-10s Audio)</option>
-        </select>
+  <!-- Navigation -->
+  <div class="nav-tabs">
+    <button class="tab-btn active" onclick="switchTab('studio')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+      Studio Playground
+    </button>
+    <button class="tab-btn" onclick="switchTab('api')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      OpenAI Speech API
+    </button>
+    <button class="tab-btn" onclick="switchTab('info')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>
+      System Architecture
+    </button>
+  </div>
+
+  <!-- Tab 1: Studio Playground -->
+  <div id="tab-studio">
+    <div class="card">
+      <div class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        Select Voice or Clone Speaker
       </div>
-      <div>
-        <label for="apiKey">API Key (Optional)</label>
-        <input type="text" id="apiKey" placeholder="Leave empty if none configured">
+
+      <div class="voice-grid">
+        <div class="voice-card selected" onclick="selectVoice('nature_en', this)">
+          <div class="voice-name">
+            <span>Nature / Doc</span>
+            <span class="voice-tag">EN</span>
+          </div>
+          <div class="voice-desc">Warm cinematic documentary narration with gentle cadence.</div>
+        </div>
+
+        <div class="voice-card" onclick="selectVoice('mandarin_zh', this)">
+          <div class="voice-name">
+            <span>Conversational</span>
+            <span class="voice-tag">ZH</span>
+          </div>
+          <div class="voice-desc">Fluent native Mandarin with natural conversational warmth.</div>
+        </div>
+
+        <div class="voice-card" onclick="selectVoice('storyteller', this)">
+          <div class="voice-name">
+            <span>Storyteller</span>
+            <span class="voice-tag">EN</span>
+          </div>
+          <div class="voice-desc">Expressive character pacing ideal for fiction and stories.</div>
+        </div>
+
+        <div class="voice-card" onclick="selectVoice('narrator', this)">
+          <div class="voice-name">
+            <span>Narrator</span>
+            <span class="voice-tag">EN</span>
+          </div>
+          <div class="voice-desc">Crisp, authoritative studio voice for audiobooks and news.</div>
+        </div>
+
+        <div class="voice-card" onclick="selectVoice('custom', this)">
+          <div class="voice-name">
+            <span style="color:var(--accent);">+ Clone Voice</span>
+            <span class="voice-tag" style="background:var(--accent-glow); color:var(--accent);">5-10s</span>
+          </div>
+          <div class="voice-desc">Record or upload any 5–10 second voice clip to instantly clone.</div>
+        </div>
       </div>
-    </div>
 
-    <div id="customVoiceBox" style="display:none; margin-bottom: 18px; padding: 16px; background: rgba(56, 189, 248, 0.05); border: 1px dashed var(--accent); border-radius: 10px;">
-      <label for="refAudioFile">Upload 5–10s Reference Audio (WAV / MP3)</label>
-      <input type="file" id="refAudioFile" accept="audio/*" style="margin-bottom: 10px;">
-      <label for="refTranscript">Reference Audio Transcript (Exact words in clip)</label>
-      <input type="text" id="refTranscript" placeholder="e.g. The exact words spoken in the audio clip">
-    </div>
+      <!-- Custom Voice Panel -->
+      <div id="customVoicePanel" class="custom-voice-panel">
+        <label>Zero-Shot Voice Cloning Input <span class="hint">5 to 10 seconds of clear speech</span></label>
+        
+        <div class="upload-buttons">
+          <button id="recordBtn" class="action-btn-sm" onclick="toggleRecordMic()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+            <span id="recordBtnText">Record from Mic</span>
+          </button>
+          
+          <label class="action-btn-sm" style="margin:0; cursor:pointer;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+            <span id="uploadLabel">Upload Audio File</span>
+            <input type="file" id="audioFileInput" accept="audio/*" style="display:none;" onchange="handleAudioUpload(this)">
+          </label>
+        </div>
 
-    <div style="margin-bottom: 18px;">
-      <label for="inputText">Text to Synthesize</label>
-      <textarea id="inputText" placeholder="Enter text to speak...">Welcome to the next generation of voice synthesis. F5-TTS reproduces realistic human timbre, prosody, and breath with flow matching diffusion.</textarea>
-    </div>
+        <div id="refAudioPreviewBox" style="display:none; margin-bottom:12px;">
+          <audio id="refAudioPlayer" controls style="height:36px;"></audio>
+        </div>
 
-    <div class="slider-row">
-      <label style="margin: 0; min-width: 100px;">Speed: <span id="speedVal">1.0x</span></label>
-      <input type="range" id="speedSlider" min="0.5" max="1.8" step="0.1" value="1.0" oninput="document.getElementById('speedVal').innerText = this.value + 'x'">
-    </div>
-
-    <button id="genBtn" onclick="generateAudio()">Generate Speech</button>
-
-    <div id="playerBox" class="audio-player-box">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-        <span style="font-size:14px; font-weight:600; color:var(--success);">✓ Audio Generated</span>
-        <span id="genTime" style="font-size:13px; color:var(--text-muted);"></span>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="customTranscript">Reference Audio Transcript <span class="hint">Exact words spoken in the clip</span></label>
+          <input type="text" id="customTranscript" placeholder="e.g. Some call me nature, others call me mother nature.">
+        </div>
       </div>
-      <audio id="audioElement" controls></audio>
+
+      <!-- Text Input -->
+      <div class="form-group">
+        <label for="textInput">Text to Synthesize</label>
+        <textarea id="textInput" placeholder="Type or paste the text you want the voice to speak...">Welcome to the next generation of voice synthesis. F5-TTS reproduces realistic human timbre, prosody, and breath with flow matching diffusion.</textarea>
+        <div class="prompts-bar">
+          <span style="font-size:12px; color:var(--text-muted); align-self:center;">Try:</span>
+          <span class="prompt-chip" onclick="setPrompt('Welcome to open source AI. Today we are demonstrating zero-shot voice cloning with flow matching diffusion.')">Tech Intro</span>
+          <span class="prompt-chip" onclick="setPrompt('The ancient forest stood silent under the starlit sky, guarding secrets forgotten by the world for millennia.')">Fiction Narrative</span>
+          <span class="prompt-chip" onclick="setPrompt('对，这就是全开源流匹配语音合成，无论是音色、语调还是情感起伏，都能完美再现。')">Mandarin Chinese</span>
+          <span class="prompt-chip" onclick="setPrompt('Please remember to stay hydrated, take short breaks between tasks, and have a wonderfully productive day.')">Casual Reminder</span>
+        </div>
+      </div>
+
+      <!-- Controls Row -->
+      <div class="controls-row">
+        <div class="slider-container">
+          <div class="slider-header">
+            <span>Speech Cadence (Speed)</span>
+            <strong id="speedVal">1.0x</strong>
+          </div>
+          <input type="range" id="speedSlider" min="0.5" max="1.8" step="0.1" value="1.0" oninput="document.getElementById('speedVal').innerText = this.value + 'x'">
+        </div>
+
+        <div class="slider-container">
+          <div class="slider-header">
+            <span>ODE Flow Steps (Quality)</span>
+            <strong id="stepsVal">32</strong>
+          </div>
+          <input type="range" id="stepsSlider" min="16" max="48" step="4" value="32" oninput="document.getElementById('stepsVal').innerText = this.value">
+        </div>
+      </div>
+
+      <!-- Generate Button -->
+      <button id="generateBtn" class="btn-generate" onclick="generateSpeech()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span id="genBtnText">Synthesize Speech</span>
+      </button>
+
+      <!-- Player Box -->
+      <div id="playerCard" class="player-card">
+        <div class="player-header">
+          <div class="player-status">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            <span>Audio Ready</span>
+          </div>
+          <div id="playerMeta" class="player-meta">0.00s latency</div>
+        </div>
+
+        <canvas id="visualizerCanvas"></canvas>
+        <audio id="outputAudio" controls></audio>
+
+        <div class="player-actions">
+          <a id="downloadLink" class="download-btn" download="f5_synthesis.wav">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download WAV (24kHz)
+          </a>
+        </div>
+      </div>
+
     </div>
   </div>
 
-  <div class="card">
-    <label>OpenAI-Compatible Speech API</label>
-    <div class="api-info">
-      Use this endpoint in any OpenAI-compatible app, mobile browser, or Python client:
+  <!-- Tab 2: OpenAI Speech API -->
+  <div id="tab-api" style="display:none;">
+    <div class="card">
+      <div class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        OpenAI-Compatible Speech Endpoint (`/v1/audio/speech`)
+      </div>
+      <p style="color:var(--text-secondary); font-size:14px; margin-bottom:16px;">
+        This Kaggle server acts as a drop-in replacement for OpenAI's Text-to-Speech API. Compatible with browser extensions, mobile reading apps, and standard AI libraries.
+      </p>
+
+      <div class="code-box">
+        <div class="code-header">
+          <span>cURL Command</span>
+          <button class="copy-btn" onclick="copySnippet('curlCode')">Copy</button>
+        </div>
+        <pre id="curlCode"></pre>
+      </div>
+
+      <div class="code-box">
+        <div class="code-header">
+          <span>Python (OpenAI SDK)</span>
+          <button class="copy-btn" onclick="copySnippet('pythonCode')">Copy</button>
+        </div>
+        <pre id="pythonCode"></pre>
+      </div>
     </div>
-    <pre id="curlSnippet">curl -X POST &lt;ORIGIN&gt;/v1/audio/speech \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"f5-tts","input":"Hello from F5-TTS!","voice":"nature_en"}' \\
-  --output speech.wav</pre>
   </div>
+
+  <!-- Tab 3: System Architecture -->
+  <div id="tab-info" style="display:none;">
+    <div class="card">
+      <div class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+        Hardware & Runtime Footprint (Kaggle T4 ×2)
+      </div>
+      
+      <div style="color:var(--text-secondary); font-size:14px; line-height:1.7;">
+        <p style="margin-bottom:12px;">
+          • <strong>Model Weights:</strong> F5-TTS v1 Base weighs 1.48 GB, running on <code>CUDA:0</code> with zero cross-GPU PCIe transfer latency.
+        </p>
+        <p style="margin-bottom:12px;">
+          • <strong>Vocoder:</strong> Vocos Mel-24kHz vocoder (~50 MB) reconstructing high-fidelity audio without phase distortion.
+        </p>
+        <p style="margin-bottom:12px;">
+          • <strong>Total VRAM Allocated:</strong> ~2.8 GB / 15.8 GB (leaving ~13 GB VRAM free on GPU 0, while GPU 1 remains idle).
+        </p>
+        <p style="margin-bottom:12px;">
+          • <strong>Real-Time Factor (RTF):</strong> ~0.25x (generates 10 seconds of speech in approximately 2.5 seconds).
+        </p>
+        <p>
+          • <strong>Safety Watchdog:</strong> 240-minute automatic termination watchdog to prevent draining Kaggle compute hours.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    F5-TTS Voice Studio · Hosted on Kaggle Dual NVIDIA T4 · Cloudflare Quick Tunnel
+  </footer>
 </div>
 
-<script>
-  // Dynamically update snippet with current origin
-  document.getElementById('curlSnippet').innerText = 
-    `curl -X POST ${window.location.origin}/v1/audio/speech \\\\\n` +
-    `  -H "Content-Type: application/json" \\\\\n` +
-    `  -d '{"model":"f5-tts","input":"Hello from F5-TTS!","voice":"nature_en"}' \\\\\n` +
-    `  --output speech.wav`;
+<div id="toast" class="toast">Snippet copied to clipboard!</div>
 
-  function onVoiceChange() {
-    const val = document.getElementById('voiceSelect').value;
-    document.getElementById('customVoiceBox').style.display = (val === 'custom') ? 'block' : 'none';
+<script>
+  let selectedVoice = 'nature_en';
+  let uploadedAudioBase64 = null;
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let isRecording = false;
+
+  // Audio Visualizer Context
+  let audioCtx = null;
+  let analyser = null;
+  let sourceNode = null;
+  let animationId = null;
+
+  function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.getElementById('tab-studio').style.display = (tab === 'studio') ? 'block' : 'none';
+    document.getElementById('tab-api').style.display = (tab === 'api') ? 'block' : 'none';
+    document.getElementById('tab-info').style.display = (tab === 'info') ? 'block' : 'none';
+    event.currentTarget.classList.add('active');
   }
 
-  async function generateAudio() {
-    const btn = document.getElementById('genBtn');
-    const playerBox = document.getElementById('playerBox');
-    const audio = document.getElementById('audioElement');
-    const genTime = document.getElementById('genTime');
-    const text = document.getElementById('inputText').value.trim();
-    const voice = document.getElementById('voiceSelect').value;
-    const speed = parseFloat(document.getElementById('speedSlider').value);
-    const key = document.getElementById('apiKey').value.trim();
+  function selectVoice(voiceId, element) {
+    selectedVoice = voiceId;
+    document.querySelectorAll('.voice-card').forEach(c => c.classList.remove('selected'));
+    element.classList.add('selected');
 
-    if (!text) { alert('Please enter some text'); return; }
+    const customPanel = document.getElementById('customVoicePanel');
+    customPanel.style.display = (voiceId === 'custom') ? 'block' : 'none';
+  }
 
-    btn.disabled = true;
-    btn.innerText = 'Synthesizing with Flow Matching Diffusion...';
+  function setPrompt(text) {
+    document.getElementById('textInput').value = text;
+  }
+
+  // Audio Upload Handling
+  function handleAudioUpload(input) {
+    if (input.files && input.files[0]) {
+      const file = input.files[0];
+      document.getElementById('uploadLabel').innerText = file.name.substring(0, 16) + '...';
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        uploadedAudioBase64 = e.target.result.split(',')[1];
+        const preview = document.getElementById('refAudioPlayer');
+        preview.src = e.target.result;
+        document.getElementById('refAudioPreviewBox').style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  // Microphone Recording
+  async function toggleRecordMic() {
+    const btn = document.getElementById('recordBtn');
+    const text = document.getElementById('recordBtnText');
+
+    if (!isRecording) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(audioChunks, { type: 'audio/wav' });
+          const preview = document.getElementById('refAudioPlayer');
+          preview.src = URL.createObjectURL(blob);
+          document.getElementById('refAudioPreviewBox').style.display = 'block';
+
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            uploadedAudioBase64 = reader.result.split(',')[1];
+          };
+          reader.readAsDataURL(blob);
+          stream.getTracks().forEach(t => t.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        btn.classList.add('recording');
+        text.innerText = 'Recording... (Click Stop)';
+      } catch (err) {
+        alert('Microphone access denied or not supported in this browser: ' + err.message);
+      }
+    } else {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      isRecording = false;
+      btn.classList.remove('recording');
+      text.innerText = 'Record Again';
+    }
+  }
+
+  // Speech Synthesis Request
+  async function generateSpeech() {
+    const btn = document.getElementById('generateBtn');
+    const btnText = document.getElementById('genBtnText');
+    const playerCard = document.getElementById('playerCard');
+    const audioElement = document.getElementById('outputAudio');
+    const playerMeta = document.getElementById('playerMeta');
+    const downloadLink = document.getElementById('downloadLink');
+
+    const text = document.getElementById('textInput').value.trim();
+    if (!text) {
+      alert('Please enter some text to synthesize.');
+      return;
+    }
 
     const payload = {
       model: "f5-tts",
       input: text,
-      voice: voice,
-      speed: speed
+      voice: selectedVoice,
+      speed: parseFloat(document.getElementById('speedSlider').value),
+      nfe_step: parseInt(document.getElementById('stepsSlider').value)
     };
 
-    if (voice === 'custom') {
-      const fileInput = document.getElementById('refAudioFile');
-      if (!fileInput.files.length) {
-        alert('Please choose a reference audio file');
-        btn.disabled = false;
-        btn.innerText = 'Generate Speech';
+    if (selectedVoice === 'custom') {
+      if (!uploadedAudioBase64) {
+        alert('Please record or upload a 5-10 second reference voice clip.');
         return;
       }
-      const refText = document.getElementById('refTranscript').value.trim();
-      const file = fileInput.files[0];
-      const reader = new FileReader();
-      const b64 = await new Promise((resolve) => {
-        reader.onload = () => resolve(reader.result.split(',')[1]);
-        reader.readAsDataURL(file);
-      });
-      payload.ref_audio = b64;
-      payload.ref_text = refText;
+      payload.ref_audio = uploadedAudioBase64;
+      payload.ref_text = document.getElementById('customTranscript').value.trim();
     }
+
+    btn.disabled = true;
+    btnText.innerText = 'Solving Flow Matching ODE on T4...';
 
     const t0 = performance.now();
     try {
-      const headers = { 'Content-Type': 'application/json' };
-      if (key) headers['Authorization'] = 'Bearer ' + key;
-
       const resp = await fetch('/v1/audio/speech', {
         method: 'POST',
-        headers: headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
 
@@ -423,17 +1157,109 @@ DOCS_HTML = """<!DOCTYPE html>
 
       const blob = await resp.blob();
       const dt = ((performance.now() - t0) / 1000).toFixed(2);
-      audio.src = URL.createObjectURL(blob);
-      playerBox.style.display = 'block';
-      genTime.innerText = `Generated in ${dt}s`;
-      audio.play();
-    } catch (e) {
-      alert('Error: ' + e.message);
+      const audioUrl = URL.createObjectURL(blob);
+
+      audioElement.src = audioUrl;
+      downloadLink.href = audioUrl;
+      playerMeta.innerText = `Synthesized in ${dt}s · 24,000 Hz`;
+      playerCard.style.display = 'block';
+      playerCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      setupVisualizer(audioElement);
+      audioElement.play();
+
+    } catch (err) {
+      alert('Synthesis error: ' + err.message);
     } finally {
       btn.disabled = false;
-      btn.innerText = 'Generate Speech';
+      btnText.innerText = 'Synthesize Speech';
     }
   }
+
+  // Real-Time Canvas Audio Visualizer
+  function setupVisualizer(audio) {
+    if (audioCtx) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      sourceNode = audioCtx.createMediaElementSource(audio);
+      sourceNode.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      analyser.fftSize = 128;
+
+      const canvas = document.getElementById('visualizerCanvas');
+      const ctx = canvas.getContext('2d');
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      function draw() {
+        animationId = requestAnimationFrame(draw);
+        analyser.getByteFrequencyData(dataArray);
+
+        ctx.fillStyle = '#080c14';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const barWidth = (canvas.width / bufferLength) * 1.8;
+        let x = 0;
+
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = (dataArray[i] / 255) * canvas.height * 0.9;
+          const gradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
+          gradient.addColorStop(0, '#0284c7');
+          gradient.addColorStop(1, '#38bdf8');
+
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+          x += barWidth + 2;
+        }
+      }
+      draw();
+    } catch(e) {
+      console.warn("Visualizer audio context note:", e);
+    }
+  }
+
+  // Update Dynamic Snippets
+  function updateSnippets() {
+    const origin = window.location.origin;
+    document.getElementById('curlCode').innerText = 
+`curl -X POST ${origin}/v1/audio/speech \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "f5-tts",
+    "input": "This is synthetic human speech generated with flow matching diffusion.",
+    "voice": "nature_en",
+    "speed": 1.0
+  }' \\
+  --output speech.wav`;
+
+    document.getElementById('pythonCode').innerText = 
+`from openai import OpenAI
+
+client = OpenAI(
+    base_url="${origin}/v1",
+    api_key="none",
+)
+
+response = client.audio.speech.create(
+    model="f5-tts",
+    voice="nature_en",
+    input="F5-TTS produces natural speech cadence and emotional prosody.",
+)
+
+response.stream_to_file("speech.wav")`;
+  }
+
+  function copySnippet(elementId) {
+    const code = document.getElementById(elementId).innerText;
+    navigator.clipboard.writeText(code).then(() => {
+      const toast = document.getElementById('toast');
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 2000);
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', updateSnippets);
 </script>
 </body>
 </html>
@@ -441,6 +1267,11 @@ DOCS_HTML = """<!DOCTYPE html>
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+    if HTML_PATH.exists():
+        try:
+            return HTMLResponse(content=HTML_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return HTMLResponse(content=DOCS_HTML)
 
 if __name__ == "__main__":

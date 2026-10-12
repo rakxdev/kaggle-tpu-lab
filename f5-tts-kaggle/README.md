@@ -110,10 +110,20 @@ In a Kaggle Notebook with **GPU T4 ×2** and **Internet ON**:
 ## How to Use
 
 ### A. Web Voice Studio (Mobile & Desktop)
-Open the generated `https://*.trycloudflare.com` URL in any browser:
-1. **Preset Voices**: Select from built-in voices (`nature_en`, `mandarin_zh`, `storyteller`, `narrator`).
-2. **Instant Voice Cloning**: Switch dropdown to **Upload Custom Voice**, upload any 5–10 second voice recording from your phone or PC, type what the speaker said in that clip, and type the new text you want them to speak.
-3. Click **Generate Speech** and listen immediately in the embedded audio player.
+Open the generated `https://*.trycloudflare.com` URL in any browser (Firefox on Linux, Kiwi Browser / Chrome on Android):
+1. **Interactive Audio Visualizer**: Watch real-time frequency waves on the canvas player as your audio synthesizes and plays back.
+2. **Preset Voice Cards**: Switch effortlessly between:
+   - **Nature / Documentary** (`nature_en`) — Warm cinematic English narration.
+   - **Conversational** (`mandarin_zh`) — Fluent native Mandarin Chinese with natural inflection.
+   - **Storyteller** (`storyteller`) — Expressive pacing and character cadence.
+   - **Narrator** (`narrator`) — Crisp, authoritative audiobook voice.
+3. **Instant Microphone Voice Cloning**:
+   - Click **Record from Mic** directly on your phone or laptop.
+   - Speak for 5 to 10 seconds, then click Stop.
+   - Type the words you spoke, enter your target text, and F5-TTS will immediately replicate your voice!
+4. **File Upload Option**: Or upload any pre-recorded WAV, MP3, or M4A clip.
+5. **Flow Matching Controls**: Tune ODE steps (16 to 48 steps) and cadence speed (0.5x to 1.8x).
+6. **1-Click Download**: Save the generated 24kHz studio-quality WAV directly to your device.
 
 ### B. OpenAI-Compatible Speech API (`/v1/audio/speech`)
 Send standard POST requests compatible with OpenAI's audio API:
