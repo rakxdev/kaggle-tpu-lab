@@ -355,9 +355,15 @@ DOCS_HTML = r"""<!DOCTYPE html>
     padding: 4px;
     margin-bottom: 24px;
     gap: 4px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  .nav-tabs::-webkit-scrollbar { display: none; }
   .tab-btn {
     flex: 1;
+    min-width: max-content;
+    white-space: nowrap;
     background: transparent;
     border: none;
     color: var(--text-secondary);
@@ -580,7 +586,14 @@ DOCS_HTML = r"""<!DOCTYPE html>
     margin-bottom: 24px;
   }
   @media(max-width: 600px) {
+    h1 { font-size: 26px; }
+    p.subtitle { font-size: 13px; }
+    .brand-pill { font-size: 11px; padding: 4px 10px; }
+    .card { padding: 20px 16px; border-radius: var(--radius-lg); }
+    .tab-btn { font-size: 12px; padding: 8px 10px; }
     .controls-row { grid-template-columns: 1fr; }
+    .voice-grid { grid-template-columns: 1fr; }
+    .btn-generate { padding: 14px; font-size: 15px; }
   }
   .slider-container {
     background: var(--bg-surface);
