@@ -27,6 +27,19 @@ KIT_DIR = Path(__file__).resolve().parent
 if str(KIT_DIR) not in sys.path:
     sys.path.insert(0, str(KIT_DIR))
 
+# Guard against pyarrow requiring NumPy 2.0 while environment has NumPy 1.26.4
+try:
+    import pyarrow
+except ImportError as e:
+    if "NumPy 2.0" in str(e) or "pyarrow" in str(e):
+        print("Auto-aligning pyarrow with NumPy 1.x (installing pyarrow==18.0.0)...")
+        import subprocess
+        subprocess.run(
+            ["uv", "pip", "install", "--python", sys.executable, "-q", "pyarrow==18.0.0"],
+            check=False
+        )
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
 import torch
 # Allow smooth eager fallback if torch.compile meets SM75 kernel quirks
 torch._dynamo.config.suppress_errors = True
