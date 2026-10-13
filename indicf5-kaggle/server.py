@@ -114,7 +114,7 @@ class NormalizeRequest(BaseModel):
 async def health():
     vram_alloc = 0.0
     if torch.cuda.is_available():
-        vram_alloc = torch.cuda.memory_allocated(0) / (1024**3)
+        vram_alloc = torch.cuda.memory_allocated() / (1024**3)
     return {
         "status": "ok",
         "engine": "IndicF5 (330M Flow-Matching Diffusion)",

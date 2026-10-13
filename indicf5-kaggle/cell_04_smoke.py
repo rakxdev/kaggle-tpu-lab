@@ -41,8 +41,12 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print(f"== 1. Device & VRAM Baseline ==")
 print(f"  Target device: {device}")
 if torch.cuda.is_available():
-    torch.cuda.reset_peak_memory_stats(0)
-    base_vram = torch.cuda.memory_allocated(0) / (1024**3)
+    torch.cuda.set_device(0)
+    try:
+        torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        pass
+    base_vram = torch.cuda.memory_allocated() / (1024**3)
     print(f"  Initial VRAM allocated: {base_vram:.2f} GiB")
 
 print(f"\n== 2. Loading IndicF5 Model ==")
@@ -57,7 +61,7 @@ model = AutoModel.from_pretrained(
     trust_remote_code=True,
 ).to(device)
 
-model_vram = torch.cuda.memory_allocated(0) / (1024**3) if torch.cuda.is_available() else 0.0
+model_vram = torch.cuda.memory_allocated() / (1024**3) if torch.cuda.is_available() else 0.0
 print(f"  Model loaded in {time.time() - t0_load:.2f}s | VRAM: {model_vram:.2f} GiB")
 
 print(f"\n== 3. Validating Shubh Voice Reference ==")
@@ -109,7 +113,7 @@ print(f"  Normalized text: \"{normalized_text}\"")
 run_synthesis(normalized_text, OUT_HIN, "Hinglish Transliterated")
 
 if torch.cuda.is_available():
-    peak_vram = torch.cuda.max_memory_allocated(0) / (1024**3)
+    peak_vram = torch.cuda.max_memory_allocated() / (1024**3)
     print(f"\n== 6. GPU Turing T4 Memory Profile ==")
     print(f"  Peak VRAM consumed : {peak_vram:.2f} GiB / 15.83 GiB ({peak_vram/15.83*100:.1f}%)")
     print(f"  VRAM Headroom      : {15.83 - peak_vram:.2f} GiB (>70% free)")
