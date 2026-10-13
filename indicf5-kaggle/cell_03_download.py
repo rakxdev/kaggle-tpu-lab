@@ -10,6 +10,7 @@ import os
 import sys
 import shutil
 import glob
+import time
 from pathlib import Path
 
 # Auto-re-execute inside isolated Python 3.11 venv
@@ -48,13 +49,25 @@ print("  Authenticated successfully.")
 
 print(f"\n== 2. Downloading ai4bharat/IndicF5 ==")
 print(f"  Target directory: {CHECKPOINTS}")
-snapshot_download(
-    repo_id="ai4bharat/IndicF5",
-    local_dir=str(CHECKPOINTS),
-    token=HF_TOKEN,
-    max_workers=8,
-)
-print("  Snapshot download completed.")
+
+# Filter to ONLY the exact inference files (skips 70+ training dataset scripts that cause HF 500s)
+for attempt in range(1, 4):
+    try:
+        snapshot_download(
+            repo_id="ai4bharat/IndicF5",
+            local_dir=str(CHECKPOINTS),
+            token=HF_TOKEN,
+            allow_patterns=["*.safetensors", "*.json", "*.txt", "model.py"],
+            ignore_patterns=["f5_tts/train/*", "f5_tts/eval/*", "f5_tts/scripts/*", "*.flac", "samples/*"],
+            max_workers=4,
+        )
+        print("  Snapshot download completed.")
+        break
+    except Exception as e:
+        print(f"  Attempt {attempt}/3 encountered transient error: {e}")
+        if attempt == 3:
+            raise
+        time.sleep(3)
 
 print(f"\n== 3. Checkpoint Validation ==")
 safetensors_path = CHECKPOINTS / "model.safetensors"
