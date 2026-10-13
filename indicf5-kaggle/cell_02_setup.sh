@@ -82,6 +82,20 @@ for p in candidates:
         print(f'  no target pattern in: {p}')
 
 print(f'  duration patch verified on {patched_count} location(s).')
+
+# Decouple training Trainer import in model/__init__.py so inference never pulls datasets
+for p in glob.glob('$VENV/**/f5_tts/model/__init__.py', recursive=True):
+    try:
+        s = Path(p).read_text(encoding='utf-8')
+        if 'from f5_tts.model.trainer import Trainer' in s and 'try:' not in s:
+            s = s.replace(
+                'from f5_tts.model.trainer import Trainer',
+                'try:\n    from f5_tts.model.trainer import Trainer\nexcept Exception:\n    Trainer = None'
+            )
+            Path(p).write_text(s, encoding='utf-8')
+            print(f'  decoupled training trainer in: {p}')
+    except Exception:
+        pass
 "
 
 echo ""

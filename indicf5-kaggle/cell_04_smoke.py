@@ -27,18 +27,51 @@ KIT_DIR = Path(__file__).resolve().parent
 if str(KIT_DIR) not in sys.path:
     sys.path.insert(0, str(KIT_DIR))
 
-# Guard against pyarrow requiring NumPy 2.0 while environment has NumPy 1.26.4
-try:
-    import pyarrow
-except ImportError as e:
-    if "NumPy 2.0" in str(e) or "pyarrow" in str(e):
-        print("Auto-aligning pyarrow with NumPy 1.x (installing pyarrow==18.0.0)...")
-        import subprocess
-        subprocess.run(
-            ["uv", "pip", "install", "--python", sys.executable, "-q", "pyarrow==18.0.0"],
-            check=False
-        )
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+# Mock unused training-only packages (datasets/pyarrow) so inference never triggers
+# training-stack dependency conflicts (BucketNotFoundError, pyarrow/numpy mismatches)
+import types
+for _mod_name in ["datasets", "pyarrow", "pyarrow.lib"]:
+    if _mod_name not in sys.modules:
+        _m = types.ModuleType(_mod_name)
+        _m.Dataset = type("Dataset", (), {})
+        sys.modules[_mod_name] = _m
+
+def patch_f5_tts_engine():
+    """Decouples training dependencies and ensures duration patch on all copies."""
+    import glob
+    # 1. Patch utils_infer.py: direct CFM import & duration fix
+    for p in glob.glob("/kaggle/tmp/indicf5/**/utils_infer.py", recursive=True) + \
+             glob.glob("/root/.cache/huggingface/**/utils_infer.py", recursive=True):
+        try:
+            s = Path(p).read_text(encoding="utf-8")
+            c = False
+            if "from f5_tts.model import CFM" in s:
+                s = s.replace("from f5_tts.model import CFM", "from f5_tts.model.cfm import CFM")
+                c = True
+            if 'len(ref_text.encode("utf-8"))' in s:
+                s = s.replace('len(ref_text.encode("utf-8"))', 'sum(1 for c in ref_text if not c.isspace())')
+                s = s.replace('len(gen_text.encode("utf-8"))', 'sum(1 for c in gen_text if not c.isspace())')
+                c = True
+            if c:
+                Path(p).write_text(s, encoding="utf-8")
+        except Exception:
+            pass
+
+    # 2. Patch model/__init__.py: wrap Trainer in try/except
+    for p in glob.glob("/kaggle/tmp/indicf5/**/model/__init__.py", recursive=True) + \
+             glob.glob("/root/.cache/huggingface/**/model/__init__.py", recursive=True):
+        try:
+            s = Path(p).read_text(encoding="utf-8")
+            if "from f5_tts.model.trainer import Trainer" in s and "try:" not in s:
+                s = s.replace(
+                    "from f5_tts.model.trainer import Trainer",
+                    "try:\n    from f5_tts.model.trainer import Trainer\nexcept Exception:\n    Trainer = None"
+                )
+                Path(p).write_text(s, encoding="utf-8")
+        except Exception:
+            pass
+
+patch_f5_tts_engine()
 
 import torch
 # Allow smooth eager fallback if torch.compile meets SM75 kernel quirks
