@@ -29,16 +29,20 @@ fi
 
 PY="$VENV/bin/python"
 PIP="$VENV/bin/pip"
+export VIRTUAL_ENV="$VENV"
+export PATH="$VENV/bin:$PATH"
 
 echo "  using: $($PY --version) at $PY"
 
 echo ""
 echo "== 2. PyTorch & CUDA 12.4 installation =="
-uv pip --python "$PY" install -q "torch>=2.0,<2.6" "torchaudio>=2.0,<2.6" "numpy<2.1" --index-url https://download.pytorch.org/whl/cu124
+uv pip install --python "$PY" -q "torch>=2.0,<2.6" "torchaudio>=2.0,<2.6" "numpy<2.1" --index-url https://download.pytorch.org/whl/cu124 || \
+  "$PIP" install -q "torch>=2.0,<2.6" "torchaudio>=2.0,<2.6" "numpy<2.1" --index-url https://download.pytorch.org/whl/cu124
 
 echo ""
 echo "== 3. fairseq & ai4bharat-transliteration build =="
-uv pip --python "$PY" install -q "setuptools<69" "Cython<3" wheel
+uv pip install --python "$PY" -q "setuptools<69" "Cython<3" wheel || \
+  "$PIP" install -q "setuptools<69" "Cython<3" wheel
 
 _FSDIR=$(mktemp -d)
 echo "  fetching fairseq v0.12.2 source..."
@@ -51,13 +55,16 @@ echo "  compiling fairseq C extensions (isolated venv)..."
 rm -rf "$_FSDIR"
 
 echo "  installing ai4bharat-transliteration..."
-uv pip --python "$PY" install -q "ai4bharat-transliteration==1.1.3"
-uv pip --python "$PY" install -q --upgrade setuptools
+uv pip install --python "$PY" -q --no-build-isolation "ai4bharat-transliteration==1.1.3" || \
+  "$PIP" install -q --no-build-isolation "ai4bharat-transliteration==1.1.3"
+uv pip install --python "$PY" -q --upgrade setuptools || "$PIP" install -q --upgrade setuptools
 
 echo ""
 echo "== 4. IndicF5 & Studio dependencies =="
-uv pip --python "$PY" install -q git+https://github.com/AI4Bharat/IndicF5.git
-uv pip --python "$PY" install -q fastapi uvicorn soundfile pydub "huggingface_hub<2.0,>=1.16.0" hf_transfer "transformers<5.0,>=4.40"
+uv pip install --python "$PY" -q git+https://github.com/AI4Bharat/IndicF5.git || \
+  "$PIP" install -q git+https://github.com/AI4Bharat/IndicF5.git
+uv pip install --python "$PY" -q fastapi uvicorn soundfile pydub "huggingface_hub<2.0,>=1.16.0" hf_transfer "transformers<5.0,>=4.40" || \
+  "$PIP" install -q fastapi uvicorn soundfile pydub "huggingface_hub<2.0,>=1.16.0" hf_transfer "transformers<5.0,>=4.40"
 
 echo ""
 echo "== 5. IndicXlit weights pre-cache =="
@@ -123,7 +130,7 @@ print(f'  duration patch verified on {patched_count} location(s).')
 echo ""
 echo "== 8. Environment verification =="
 $PY -c "
-import torch, transformers, f5_tts, soundfile
+import sys, torch, transformers, f5_tts, soundfile
 print('  Python version :', sys.version.split()[0])
 print('  PyTorch version:', torch.__version__, '| CUDA:', torch.cuda.is_available())
 print('  Transformers   :', transformers.__version__)
