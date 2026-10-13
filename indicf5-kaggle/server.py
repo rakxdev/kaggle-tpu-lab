@@ -71,6 +71,12 @@ def patch_f5_tts_engine():
                 s = s.replace('len(ref_text.encode("utf-8"))', 'sum(1 for c in ref_text if not c.isspace())')
                 s = s.replace('len(gen_text.encode("utf-8"))', 'sum(1 for c in gen_text if not c.isspace())')
                 c = True
+            if "vocoder = vocoder.eval().to(device)" in s:
+                s = s.replace(
+                    "vocoder = vocoder.eval().to(device)",
+                    "try:\n            vocoder = vocoder.eval().to(device)\n        except Exception:\n            vocoder = vocoder.to_empty(device=device).eval()"
+                )
+                c = True
             if c:
                 Path(p).write_text(s, encoding="utf-8")
         except Exception:
@@ -174,6 +180,7 @@ def get_model():
         tts_model = AutoModel.from_pretrained(
             model_source,
             trust_remote_code=True,
+            low_cpu_mem_usage=False,
         ).to(device)
         print(f"[IndicF5] Model initialized in {time.time() - t0:.2f}s")
     return tts_model
