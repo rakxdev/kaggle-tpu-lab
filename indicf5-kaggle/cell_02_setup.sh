@@ -75,6 +75,12 @@ for p in candidates:
     if 'len(ref_text.encode(\"utf-8\"))' in src:
         new_src = src.replace('len(ref_text.encode(\"utf-8\"))', 'sum(1 for c in ref_text if not c.isspace())')
         new_src = new_src.replace('len(gen_text.encode(\"utf-8\"))', 'sum(1 for c in gen_text if not c.isspace())')
+        # Split on Devanagari । in chunk_text
+        new_src = new_src.replace('r\"(?<=[;:,.!?])\\s+|(?<=[；：，。！？])\"', 'r\"(?<=[;:,.!?।])\\s+|(?<=[；：，।。！？])\"')
+        new_src = new_src.replace('if len(current_chunk.encode(\"utf-8\")) + len(sentence.encode(\"utf-8\")) <= max_chars:', 'if len(current_chunk) + len(sentence) <= max_chars:')
+        for line in new_src.splitlines():
+            if 'max_chars = int(' in line:
+                new_src = new_src.replace(line, '    max_chars = 100')
         Path(p).write_text(new_src, encoding='utf-8')
         print(f'  successfully patched: {p}')
         patched_count += 1

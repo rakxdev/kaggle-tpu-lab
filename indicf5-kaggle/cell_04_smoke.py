@@ -70,6 +70,22 @@ def patch_f5_tts_engine():
             if bad_block in s:
                 s = s.replace(bad_block, "vocoder = vocoder.eval().to(device)")
                 c = True
+
+            # 3. Patch chunk_text: split on Devanagari । as well as Latin punctuation
+            if 'r"(?<=[;:,.!?])\\s+|(?<=[；：，。！？])"' in s:
+                s = s.replace('r"(?<=[;:,.!?])\\s+|(?<=[；：，。！？])"', 'r"(?<=[;:,.!?।])\\s+|(?<=[；：，।。！？])"')
+                c = True
+            if 'if len(current_chunk.encode("utf-8")) + len(sentence.encode("utf-8")) <= max_chars:' in s:
+                s = s.replace(
+                    'if len(current_chunk.encode("utf-8")) + len(sentence.encode("utf-8")) <= max_chars:',
+                    'if len(current_chunk) + len(sentence) <= max_chars:'
+                )
+                c = True
+            # 4. Cap max_chars to 100 characters per chunk to prevent DiT attention context overflow
+            for line in s.splitlines():
+                if "max_chars = int(" in line:
+                    s = s.replace(line, "    max_chars = 100")
+                    c = True
             if c:
                 Path(p).write_text(s, encoding="utf-8")
         except Exception:
