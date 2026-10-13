@@ -95,6 +95,27 @@ import torch
 # Allow smooth eager fallback if torch.compile meets SM75 kernel quirks
 torch._dynamo.config.suppress_errors = True
 
+# Disable Accelerate's init_empty_weights context so Transformers instantiates submodules
+# (like Vocos vocoder) with real device memory rather than empty meta tensors
+import contextlib
+try:
+    import accelerate
+    @contextlib.contextmanager
+    def _noop_context(*args, **kwargs):
+        yield
+    accelerate.init_empty_weights = _noop_context
+except Exception:
+    pass
+
+import transformers
+import transformers.utils.import_utils
+transformers.utils.import_utils.is_accelerate_available = lambda: False
+try:
+    import transformers.modeling_utils
+    transformers.modeling_utils.init_empty_weights = _noop_context
+except Exception:
+    pass
+
 import numpy as np
 import soundfile as sf
 import huggingface_hub
