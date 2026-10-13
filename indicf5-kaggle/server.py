@@ -9,6 +9,9 @@ IndicF5 Production Master Server:
 """
 
 import os
+# Headless non-GUI backend to prevent Kaggle notebook matplotlib-inline collisions
+os.environ["MPLBACKEND"] = "Agg"
+
 import sys
 
 # Auto-re-execute inside isolated Python 3.11 venv
@@ -37,8 +40,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import torch
+# Allow smooth eager fallback if torch.compile meets SM75 kernel quirks
+torch._dynamo.config.suppress_errors = True
+
 import numpy as np
 import soundfile as sf
+import huggingface_hub
 from transformers import AutoModel
 from lib_normalize import to_unified_devanagari
 from auth_helper import get_hf_token
@@ -47,6 +54,21 @@ BASE_DIR = Path("/kaggle/tmp/indicf5")
 CHECKPOINTS = BASE_DIR / "checkpoints"
 SHUBH_WAV = BASE_DIR / "shubh_ref.wav"
 SHUBH_TXT = BASE_DIR / "shubh_ref.txt"
+
+# Guard hf_hub_download to resolve local files in checkpoints directory
+_orig_hf_download = huggingface_hub.hf_hub_download
+def _safe_hf_download(repo_id, filename, **kwargs):
+    cand = CHECKPOINTS / filename
+    if cand.exists():
+        return str(cand)
+    cand_sub = CHECKPOINTS / "checkpoints" / filename
+    if cand_sub.exists():
+        return str(cand_sub)
+    cand_base = CHECKPOINTS / Path(filename).name
+    if cand_base.exists():
+        return str(cand_base)
+    return _orig_hf_download(repo_id, filename, **kwargs)
+huggingface_hub.hf_hub_download = _safe_hf_download
 
 # Fallback asset paths inside the git checkout if not yet copied to /kaggle/tmp
 if not SHUBH_WAV.exists():

@@ -13,6 +13,9 @@ import glob
 import time
 from pathlib import Path
 
+# Headless non-GUI backend to prevent Kaggle notebook matplotlib-inline collisions
+os.environ["MPLBACKEND"] = "Agg"
+
 # Auto-re-execute inside isolated Python 3.11 venv
 VENV_PY = "/kaggle/tmp/indicf5/venv/bin/python"
 if os.path.exists(VENV_PY) and sys.executable != VENV_PY:
@@ -77,13 +80,26 @@ if safetensors_path.exists():
 else:
     raise FileNotFoundError(f"Missing model.safetensors at {safetensors_path}")
 
+vocab_src = ASSETS_DIR / "vocab.txt"
+if vocab_src.exists():
+    shutil.copy2(str(vocab_src), str(CHECKPOINTS / "vocab.txt"))
+    (CHECKPOINTS / "checkpoints").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(vocab_src), str(CHECKPOINTS / "checkpoints" / "vocab.txt"))
+
 vocab_path = CHECKPOINTS / "checkpoints" / "vocab.txt"
 if not vocab_path.exists():
     vocab_path = CHECKPOINTS / "vocab.txt"
 if vocab_path.exists():
     print(f"  vocab.txt: {vocab_path} (Verified)")
 
-print(f"\n== 4. Staging Shubh Reference Voice ==")
+print(f"\n== 4. Pre-caching Vocoder (charactr/vocos-mel-24khz) ==")
+try:
+    snapshot_download(repo_id="charactr/vocos-mel-24khz", max_workers=4)
+    print("  Vocos vocoder cached.")
+except Exception as e:
+    print(f"  Vocos pre-cache note: {e}")
+
+print(f"\n== 5. Staging Shubh Reference Voice ==")
 shubh_src_wav = ASSETS_DIR / "shubh_ref.wav"
 shubh_src_txt = ASSETS_DIR / "shubh_ref.txt"
 shubh_dst_wav = BASE_DIR / "shubh_ref.wav"

@@ -9,6 +9,9 @@ Validates the complete pipeline on Kaggle GPU 0 (Turing T4):
 """
 
 import os
+# Headless non-GUI backend to prevent Kaggle notebook matplotlib-inline collisions
+os.environ["MPLBACKEND"] = "Agg"
+
 import sys
 import time
 from pathlib import Path
@@ -25,8 +28,12 @@ if str(KIT_DIR) not in sys.path:
     sys.path.insert(0, str(KIT_DIR))
 
 import torch
+# Allow smooth eager fallback if torch.compile meets SM75 kernel quirks
+torch._dynamo.config.suppress_errors = True
+
 import numpy as np
 import soundfile as sf
+import huggingface_hub
 from transformers import AutoModel
 from lib_normalize import to_unified_devanagari
 
@@ -36,6 +43,21 @@ REF_WAV = BASE_DIR / "shubh_ref.wav"
 REF_TXT = BASE_DIR / "shubh_ref.txt"
 OUT_DEV = BASE_DIR / "smoke_devanagari.wav"
 OUT_HIN = BASE_DIR / "smoke_hinglish.wav"
+
+# Guard hf_hub_download to resolve local files in checkpoints directory
+_orig_hf_download = huggingface_hub.hf_hub_download
+def _safe_hf_download(repo_id, filename, **kwargs):
+    cand = CHECKPOINTS / filename
+    if cand.exists():
+        return str(cand)
+    cand_sub = CHECKPOINTS / "checkpoints" / filename
+    if cand_sub.exists():
+        return str(cand_sub)
+    cand_base = CHECKPOINTS / Path(filename).name
+    if cand_base.exists():
+        return str(cand_base)
+    return _orig_hf_download(repo_id, filename, **kwargs)
+huggingface_hub.hf_hub_download = _safe_hf_download
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 print(f"== 1. Device & VRAM Baseline ==")
