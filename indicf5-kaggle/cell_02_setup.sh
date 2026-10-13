@@ -42,7 +42,7 @@ uv pip install --python "$PY" -q "torch>=2.0,<2.6" "torchaudio>=2.0,<2.6" "numpy
 echo ""
 echo "== 3. IndicF5 & Audio processing stack (uv) =="
 uv pip install --python "$PY" -q git+https://github.com/AI4Bharat/IndicF5.git
-uv pip install --python "$PY" -q fastapi uvicorn soundfile pydub huggingface_hub hf_transfer "transformers<5.0,>=4.40" indic-transliteration matplotlib-inline "pyarrow<19"
+uv pip install --python "$PY" -q fastapi uvicorn soundfile pydub huggingface_hub hf_transfer "transformers<5.0,>=4.40" indic-transliteration matplotlib-inline "pyarrow==18.0.0" "datasets==2.21.0"
 
 echo ""
 echo "== 4. cloudflared tunnel client =="

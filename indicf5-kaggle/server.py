@@ -33,14 +33,27 @@ KIT_DIR = Path(__file__).resolve().parent
 if str(KIT_DIR) not in sys.path:
     sys.path.insert(0, str(KIT_DIR))
 
-# Mock unused training-only packages (datasets/pyarrow) so inference never triggers
-# training-stack dependency conflicts (BucketNotFoundError, pyarrow/numpy mismatches)
-import types
-for _mod_name in ["datasets", "pyarrow", "pyarrow.lib"]:
-    if _mod_name not in sys.modules:
-        _m = types.ModuleType(_mod_name)
-        _m.Dataset = type("Dataset", (), {})
-        sys.modules[_mod_name] = _m
+# Auto-align dependency matrix: datasets 2.21.0 + pyarrow 18.0.0 for NumPy 1.x & HF Hub compatibility
+import subprocess
+_needs_align = []
+try:
+    import pyarrow
+    if hasattr(pyarrow, "__version__") and int(pyarrow.__version__.split(".")[0]) >= 19:
+        _needs_align.append("pyarrow==18.0.0")
+except Exception:
+    _needs_align.append("pyarrow==18.0.0")
+
+try:
+    import datasets
+    if hasattr(datasets, "__version__") and int(datasets.__version__.split(".")[0]) >= 3:
+        _needs_align.append("datasets==2.21.0")
+except Exception:
+    _needs_align.append("datasets==2.21.0")
+
+if _needs_align:
+    print(f"Aligning dependency matrix ({', '.join(_needs_align)})...")
+    subprocess.run(["uv", "pip", "install", "--python", sys.executable, "-q"] + _needs_align, check=False)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 def patch_f5_tts_engine():
     """Decouples training dependencies and ensures duration patch on all copies."""
