@@ -289,6 +289,47 @@ async def health():
         ]
     }
 
+def split_into_sentence_chunks(text: str, max_chars: int = 95) -> list[str]:
+    chunks = []
+    current = ""
+    sentences = re.split(r"(?<=[;:,.!?।\n])\s+|(?<=[；：，।。！？\n])", text)
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(current) + len(s) <= max_chars:
+            current += (" " if current else "") + s
+        else:
+            if current:
+                chunks.append(current)
+            current = s
+    if current:
+        chunks.append(current)
+    return chunks if chunks else [text]
+
+def cross_fade_waves(waves, sr=24000, dur=0.15):
+    if not waves:
+        return np.array([], dtype=np.float32)
+    if len(waves) == 1:
+        return waves[0]
+    final = waves[0]
+    k = int(dur * sr)
+    for i in range(1, len(waves)):
+        p, n = final, waves[i]
+        samples = min(k, len(p), len(n))
+        if samples <= 0:
+            final = np.concatenate([p, n])
+            continue
+        fo = np.linspace(1, 0, samples, dtype=np.float32)
+        fi = np.linspace(0, 1, samples, dtype=np.float32)
+        overlap = p[-samples:] * fo + n[:samples] * fi
+        final = np.concatenate([p[:-samples], overlap, n[samples:]])
+    return final
+
+@app.get("/favicon.ico")
+async def favicon():
+    return Response(status_code=204)
+
 @app.get("/v1/audio/voices")
 async def list_voices():
     return {
@@ -355,28 +396,41 @@ async def generate_speech(req: SpeechRequest):
             ref_audio_path = str(SHUBH_WAV)
             ref_text = SHUBH_TXT.read_text(encoding="utf-8").strip()
 
-        # 3. Model Inference with Dual-GPU Worker Pool Dispatch
-        worker, dev = await worker_pool.get_worker()
+        # 3. Model Inference with Dual-GPU Parallel Chunk Dispatch
+        chunks = split_into_sentence_chunks(target_text, max_chars=95)
         t0 = time.time()
-        try:
-            def _infer_blocking():
-                with torch.inference_mode():
-                    raw = worker(
-                        text=target_text,
-                        ref_audio_path=ref_audio_path,
-                        ref_text=ref_text,
-                    )
-                if hasattr(raw, "cpu"):
-                    raw = raw.cpu().numpy()
-                arr = np.asarray(raw, dtype=np.float32).squeeze()
-                if raw.dtype == np.int16 or np.max(np.abs(arr)) > 1.5:
-                    arr = arr.astype(np.float32) / 32768.0
-                return arr
+        used_devices = set()
 
-            audio_arr = await asyncio.to_thread(_infer_blocking)
-            latency = time.time() - t0
-        finally:
-            worker_pool.release_worker((worker, dev))
+        async def _synthesize_chunk(chunk_idx: int, chunk_text: str):
+            worker, dev = await worker_pool.get_worker()
+            used_devices.add(dev)
+            try:
+                def _infer():
+                    with torch.inference_mode():
+                        raw = worker(
+                            text=chunk_text,
+                            ref_audio_path=ref_audio_path,
+                            ref_text=ref_text,
+                        )
+                    if hasattr(raw, "cpu"):
+                        raw = raw.cpu().numpy()
+                    arr = np.asarray(raw, dtype=np.float32).squeeze()
+                    if raw.dtype == np.int16 or np.max(np.abs(arr)) > 1.5:
+                        arr = arr.astype(np.float32) / 32768.0
+                    return arr
+
+                audio_chunk = await asyncio.to_thread(_infer)
+                return (chunk_idx, audio_chunk)
+            finally:
+                worker_pool.release_worker((worker, dev))
+
+        # Launch all chunks concurrently across both GPU workers
+        chunk_tasks = [_synthesize_chunk(i, c) for i, c in enumerate(chunks) if c and c.strip()]
+        results = await asyncio.gather(*chunk_tasks)
+        results.sort(key=lambda x: x[0])
+        waves = [r[1] for r in results]
+        audio_arr = cross_fade_waves(waves, sr=24000, dur=0.15)
+        latency = time.time() - t0
 
         # 4. Format Output Array
         buf = io.BytesIO()
@@ -392,7 +446,8 @@ async def generate_speech(req: SpeechRequest):
                 "Content-Disposition": "attachment; filename=synthesized_shubh.wav",
                 "X-Latency-Seconds": f"{latency:.3f}",
                 "X-Audio-Duration": f"{duration:.3f}",
-                "X-GPU-Device": dev,
+                "X-GPU-Devices": ",".join(sorted(used_devices)),
+                "X-Chunks-Count": str(len(chunks)),
                 "X-Normalized-Text": target_text.encode("utf-8").decode("latin-1", errors="replace"),
             }
         )
@@ -816,12 +871,12 @@ STUDIO_HTML = r"""<!DOCTYPE html>
         });
 
         if (!res.ok) {
+          const txt = await res.text();
           let errDetail = "Request failed (HTTP " + res.status + ")";
           try {
-            const err = await res.json();
+            const err = JSON.parse(txt);
             if (err && err.detail) errDetail = err.detail;
           } catch (e) {
-            const txt = await res.text();
             if (txt) {
               errDetail = "Gateway/Server Error: " + txt.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
             }
