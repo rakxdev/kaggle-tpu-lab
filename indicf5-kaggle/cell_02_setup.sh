@@ -19,9 +19,10 @@ mkdir -p "$BIN" "$CHECKPOINTS" "$LOGS"
 echo "== 1. isolated Python 3.11 environment via uv =="
 command -v uv > /dev/null 2>&1 || pip install -q -U uv
 
-if [ ! -f "$VENV/bin/python" ]; then
-  echo "  provisioning Python 3.11 standalone runtime..."
-  uv venv --python 3.11 "$VENV"
+if [ ! -f "$VENV/bin/pip" ]; then
+  echo "  provisioning Python 3.11 standalone runtime with pip..."
+  rm -rf "$VENV"
+  uv venv --seed --python 3.11 "$VENV"
 else
   echo "  found existing venv at $VENV"
 fi
@@ -33,12 +34,11 @@ echo "  using: $($PY --version) at $PY"
 
 echo ""
 echo "== 2. PyTorch & CUDA 12.4 installation =="
-$PY -m pip install -q --upgrade pip
-$PY -m pip install -q "torch>=2.0,<2.6" "torchaudio>=2.0,<2.6" "numpy<2.1" --index-url https://download.pytorch.org/whl/cu124
+uv pip --python "$PY" install -q "torch>=2.0,<2.6" "torchaudio>=2.0,<2.6" "numpy<2.1" --index-url https://download.pytorch.org/whl/cu124
 
 echo ""
 echo "== 3. fairseq & ai4bharat-transliteration build =="
-$PY -m pip install -q "setuptools<69" "Cython<3" wheel
+uv pip --python "$PY" install -q "setuptools<69" "Cython<3" wheel
 
 _FSDIR=$(mktemp -d)
 echo "  fetching fairseq v0.12.2 source..."
@@ -47,17 +47,17 @@ tar xzf "$_FSDIR/fairseq.tar.gz" -C "$_FSDIR"
 printf "0.12.2\n" > "$_FSDIR/fairseq-0.12.2/fairseq/version.txt"
 
 echo "  compiling fairseq C extensions (isolated venv)..."
-$PY -m pip install "$_FSDIR/fairseq-0.12.2/" --no-build-isolation -q
+"$PIP" install "$_FSDIR/fairseq-0.12.2/" --no-build-isolation -q
 rm -rf "$_FSDIR"
 
 echo "  installing ai4bharat-transliteration..."
-$PY -m pip install -q "ai4bharat-transliteration==1.1.3"
-$PY -m pip install -q --upgrade setuptools
+uv pip --python "$PY" install -q "ai4bharat-transliteration==1.1.3"
+uv pip --python "$PY" install -q --upgrade setuptools
 
 echo ""
 echo "== 4. IndicF5 & Studio dependencies =="
-$PY -m pip install -q git+https://github.com/AI4Bharat/IndicF5.git
-$PY -m pip install -q fastapi uvicorn soundfile pydub "huggingface_hub<2.0,>=1.16.0" hf_transfer "transformers<5.0,>=4.40"
+uv pip --python "$PY" install -q git+https://github.com/AI4Bharat/IndicF5.git
+uv pip --python "$PY" install -q fastapi uvicorn soundfile pydub "huggingface_hub<2.0,>=1.16.0" hf_transfer "transformers<5.0,>=4.40"
 
 echo ""
 echo "== 5. IndicXlit weights pre-cache =="
