@@ -91,6 +91,11 @@ def patch_f5_tts_engine():
                 if "max_chars = int(" in line:
                     s = s.replace(line, "    max_chars = 100")
                     c = True
+
+            # 5. Fast high-quality diffusion: 18 ODE steps instead of 32 (2x speedup)
+            if "nfe_step=32" in s:
+                s = s.replace("nfe_step=32", "nfe_step=18")
+                c = True
             if c:
                 Path(p).write_text(s, encoding="utf-8")
         except Exception:
@@ -195,30 +200,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-tts_model = None
-gpu_lock = asyncio.Lock()
+class DualGPUWorkerPool:
+    def __init__(self):
+        self.queue = asyncio.Queue()
+        self.devices = []
+        self._initialized = False
 
-def get_model():
-    global tts_model
-    if tts_model is None:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print(f"[IndicF5] Loading model into {device}...")
-        t0 = time.time()
-        
-        # Ensure HF token is loaded
+    def init_workers(self):
+        if self._initialized:
+            return
+        t0_all = time.time()
         token = get_hf_token()
         if token:
             import huggingface_hub
             huggingface_hub.login(token=token, add_to_git_credential=False)
-            
+
         model_source = str(CHECKPOINTS) if (CHECKPOINTS / "model.safetensors").exists() else "ai4bharat/IndicF5"
-        tts_model = AutoModel.from_pretrained(
-            model_source,
-            trust_remote_code=True,
-            low_cpu_mem_usage=False,
-        ).to(device)
-        print(f"[IndicF5] Model initialized in {time.time() - t0:.2f}s")
-    return tts_model
+
+        if torch.cuda.is_available():
+            count = torch.cuda.device_count()
+            target_devices = [f"cuda:{i}" for i in range(min(count, 2))]
+        else:
+            target_devices = ["cpu"]
+
+        print(f"[IndicF5 Dual-GPU Pool] Initializing {len(target_devices)} parallel workers on {target_devices}...")
+        for dev in target_devices:
+            print(f"  [Pool Worker] Loading model into {dev}...")
+            t0 = time.time()
+            model = AutoModel.from_pretrained(
+                model_source,
+                trust_remote_code=True,
+                low_cpu_mem_usage=False,
+            ).to(dev)
+            self.queue.put_nowait((model, dev))
+            self.devices.append(dev)
+            print(f"  [Pool Worker] {dev} initialized in {time.time() - t0:.2f}s")
+
+        self._initialized = True
+        print(f"[IndicF5 Dual-GPU Pool] All workers ready in {time.time() - t0_all:.2f}s")
+
+    async def get_worker(self):
+        if not self._initialized:
+            self.init_workers()
+        return await self.queue.get()
+
+    def release_worker(self, worker):
+        self.queue.put_nowait(worker)
+
+worker_pool = DualGPUWorkerPool()
 
 class SpeechRequest(BaseModel):
     model: str = Field(default="indicf5", description="Model identifier")
@@ -235,19 +264,26 @@ class NormalizeRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    vram_alloc = 0.0
+    vram_stats = []
     if torch.cuda.is_available():
-        vram_alloc = torch.cuda.memory_allocated() / (1024**3)
+        for i in range(torch.cuda.device_count()):
+            used = torch.cuda.memory_allocated(i) / (1024**3)
+            vram_stats.append(f"GPU {i}: {used:.2f} GiB")
     return {
         "status": "ok",
-        "engine": "IndicF5 (330M Flow-Matching Diffusion)",
-        "device": "cuda:0" if torch.cuda.is_available() else "cpu",
-        "vram_allocated_gb": round(vram_alloc, 2),
+        "engine": "IndicF5 (Dual-GPU Parallel Worker Pool)",
+        "concurrency": "Dual-GPU Hardware Parallel (GPU 0 + GPU 1)",
+        "devices": worker_pool.devices,
+        "available_workers": worker_pool.queue.qsize(),
+        "vram": vram_stats,
         "default_voice": "Shubh (Bulbul v3 Persona)",
         "sample_rate": 24000,
         "features": [
+            "dual-gpu-hardware-concurrency",
             "zero-shot-voice-cloning",
             "duration-patched-mode-a",
+            "sentence-chunking-hallucination-guard",
+            "fast-ode-18-steps",
             "indicxlit-unified-devanagari",
             "openai-speech-v1"
         ]
@@ -319,26 +355,30 @@ async def generate_speech(req: SpeechRequest):
             ref_audio_path = str(SHUBH_WAV)
             ref_text = SHUBH_TXT.read_text(encoding="utf-8").strip()
 
-        # 3. Model Inference with Concurrency Guard
-        async with gpu_lock:
-            model = get_model()
-            t0 = time.time()
-            with torch.inference_mode():
-                raw_audio = model(
-                    text=target_text,
-                    ref_audio_path=ref_audio_path,
-                    ref_text=ref_text,
-                )
+        # 3. Model Inference with Dual-GPU Worker Pool Dispatch
+        worker, dev = await worker_pool.get_worker()
+        t0 = time.time()
+        try:
+            def _infer_blocking():
+                with torch.inference_mode():
+                    raw = worker(
+                        text=target_text,
+                        ref_audio_path=ref_audio_path,
+                        ref_text=ref_text,
+                    )
+                if hasattr(raw, "cpu"):
+                    raw = raw.cpu().numpy()
+                arr = np.asarray(raw, dtype=np.float32).squeeze()
+                if raw.dtype == np.int16 or np.max(np.abs(arr)) > 1.5:
+                    arr = arr.astype(np.float32) / 32768.0
+                return arr
+
+            audio_arr = await asyncio.to_thread(_infer_blocking)
             latency = time.time() - t0
+        finally:
+            worker_pool.release_worker((worker, dev))
 
         # 4. Format Output Array
-        if hasattr(raw_audio, "cpu"):
-            raw_audio = raw_audio.cpu().numpy()
-        audio_arr = np.asarray(raw_audio, dtype=np.float32).squeeze()
-        
-        if raw_audio.dtype == np.int16 or np.max(np.abs(audio_arr)) > 1.5:
-            audio_arr = audio_arr.astype(np.float32) / 32768.0
-
         buf = io.BytesIO()
         sf.write(buf, audio_arr, 24000, format="WAV")
         buf.seek(0)
@@ -352,6 +392,7 @@ async def generate_speech(req: SpeechRequest):
                 "Content-Disposition": "attachment; filename=synthesized_shubh.wav",
                 "X-Latency-Seconds": f"{latency:.3f}",
                 "X-Audio-Duration": f"{duration:.3f}",
+                "X-GPU-Device": dev,
                 "X-Normalized-Text": target_text.encode("utf-8").decode("latin-1", errors="replace"),
             }
         )
@@ -775,8 +816,17 @@ STUDIO_HTML = r"""<!DOCTYPE html>
         });
 
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || "Synthesis failed");
+          let errDetail = "Request failed (HTTP " + res.status + ")";
+          try {
+            const err = await res.json();
+            if (err && err.detail) errDetail = err.detail;
+          } catch (e) {
+            const txt = await res.text();
+            if (txt) {
+              errDetail = "Gateway/Server Error: " + txt.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
+            }
+          }
+          throw new Error(errDetail);
         }
 
         const blob = await res.blob();
@@ -841,8 +891,8 @@ def main():
     parser.add_argument("--port", type=int, default=8000, help="Bind port")
     args = parser.parse_args()
 
-    # Pre-warm model in background
-    get_model()
+    # Pre-warm dual-GPU worker pool across all GPUs
+    worker_pool.init_workers()
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
