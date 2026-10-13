@@ -66,11 +66,9 @@ def patch_f5_tts_engine():
                 s = s.replace('len(ref_text.encode("utf-8"))', 'sum(1 for c in ref_text if not c.isspace())')
                 s = s.replace('len(gen_text.encode("utf-8"))', 'sum(1 for c in gen_text if not c.isspace())')
                 c = True
-            if "vocoder = vocoder.eval().to(device)" in s:
-                s = s.replace(
-                    "vocoder = vocoder.eval().to(device)",
-                    "try:\n            vocoder = vocoder.eval().to(device)\n        except Exception:\n            vocoder = vocoder.to_empty(device=device).eval()"
-                )
+            bad_block = "try:\n            vocoder = vocoder.eval().to(device)\n        except Exception:\n            vocoder = vocoder.to_empty(device=device).eval()"
+            if bad_block in s:
+                s = s.replace(bad_block, "vocoder = vocoder.eval().to(device)")
                 c = True
             if c:
                 Path(p).write_text(s, encoding="utf-8")
